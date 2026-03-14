@@ -21,7 +21,7 @@
 
 ## Why?
 
-I got tired needing to scope out all my changes I made in a day. Things quickly become a mess after working in multiple repos and multiple branches so I built this as a way to neatly track my activities so I don't miss any important updates.
+GitHub UI kinda sucks and I got tired to needing to comb through branches and repos and PRs just to give a daily update to my team. Hopefully this dashboard improves it!
 
 ## What it does
 
