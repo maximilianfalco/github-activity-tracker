@@ -17,26 +17,6 @@ export default function DashboardPage() {
   const overview = api.github.getOverview.useQuery(undefined, {
     refetchInterval: poll,
   });
-  const commits = api.github.getCommits.useQuery(
-    { dateRange: "30d" },
-    { refetchInterval: poll },
-  );
-  const prs = api.github.getPullRequests.useQuery(
-    { dateRange: "30d" },
-    { refetchInterval: poll },
-  );
-  const reviews = api.github.getReviews.useQuery(
-    { dateRange: "30d" },
-    { refetchInterval: poll },
-  );
-
-  const recentActivity = [
-    ...(commits.data?.map((d) => ({ ...d, type: "commit" as const })) ?? []),
-    ...(prs.data?.map((d) => ({ ...d, type: "pr" as const })) ?? []),
-    ...(reviews.data?.map((d) => ({ ...d, type: "review" as const })) ?? []),
-  ]
-    .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-    .slice(0, 20);
 
   return (
     <>
@@ -73,10 +53,10 @@ export default function DashboardPage() {
         <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Recent activity
         </h2>
-        {commits.isLoading ? (
+        {overview.isLoading ? (
           <ActivityFeedSkeleton />
         ) : (
-          <ActivityFeed items={recentActivity} />
+          <ActivityFeed items={overview.data?.recentActivity ?? []} />
         )}
       </div>
     </>

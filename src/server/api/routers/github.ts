@@ -135,17 +135,30 @@ export const githubRouter = createTRPCRouter({
 });
 
 function buildOverview(
-  data: Array<{ type: string; state: string | null; createdAt: Date }>,
+  data: Array<{
+    id: string;
+    type: string;
+    title: string;
+    repoName: string;
+    url: string;
+    state: string | null;
+    createdAt: Date;
+  }>,
   isStale: boolean,
 ) {
   const thirtyDaysAgo = daysAgo("30d");
   const recent = data.filter((d) => d.createdAt >= thirtyDaysAgo);
+
+  const recentActivity = data
+    .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, 15);
 
   return {
     commits30d: recent.filter((d) => d.type === "commit").length,
     openPrs: data.filter((d) => d.type === "pr" && d.state === "open").length,
     mergedPrs: recent.filter((d) => d.type === "pr" && d.state === "merged").length,
     reviewsGiven: recent.filter((d) => d.type === "review").length,
+    recentActivity,
     isStale,
   };
 }
