@@ -5,7 +5,7 @@
 <h1 align="center">GitHub Activity Tracker</h1>
 
 <p align="center">
-  A personal dashboard to view your recent GitHub activity — commits, pull requests, and code reviews — all in one place.
+  A personal dashboard for keeping tabs on your GitHub activity across all your repos.
 </p>
 
 <p align="center">
@@ -19,41 +19,39 @@
 
 ---
 
+## Why?
+
+I got tired needing to scope out all my changes I made in a day. Things quickly become a mess after working in multiple repos and multiple branches so I built this as a way to neatly track my activities so I don't miss any important updates.
+
 ## What it does
 
-Connects to the GitHub API via OAuth, fetches your activity across all repositories, and renders it in a dashboard with filtering, sorting, and auto-refresh.
+Sign in with GitHub and you get a dashboard showing everything you've been up to:
 
-1. **Overview** — daily commit count, open/merged PRs, reviews given, and a recent activity feed.
-2. **Commits** — filterable list (1d, 7d, 30d, 90d) with branch names and SHAs. Uses a hybrid fetching strategy combining the Events API and Search API for comprehensive coverage.
-3. **Pull Requests** — filterable by state (open, merged, closed) and date range, with status badges.
-4. **Reviews** — PRs you've reviewed, filterable by date range.
-5. **Repositories** — activity breakdown by repo, sortable by total activity or recency.
+- **Overview** — quick glance at your commit count, PR status, and reviews given
+- **Commits** — browse your commits with date filters (1d/7d/30d/90d), branch names, and SHAs
+- **Pull Requests** — see your PRs filtered by open, merged, or closed
+- **Reviews** — PRs you've reviewed
+- **Repos** — activity broken down by repository, sortable by activity or recency
 
-## Why?
-I got tired needing to scope out all my changes I made in a day. Things quickly become a mess after working in multiple repos and multiple branches so I built this as a way to neatly track my activities so I don't miss any important updates
+Everything auto-refreshes and results are cached so you don't burn through GitHub's rate limits.
 
 ## Quick Start
 
-**Prerequisites:** Node.js 22+, pnpm, PostgreSQL
+You'll need Node.js 22+, pnpm, and PostgreSQL.
 
 ```bash
-# 1. Clone and install
 git clone https://github.com/maximilianfalco/github-activity-tracker.git
 cd github-activity-tracker
 pnpm install
 
-# 2. Set up environment
 cp .env.example .env
-# Fill in DATABASE_URL, AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
+# fill in your DATABASE_URL, AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
 
-# 3. Push the database schema
 pnpm db:push
-
-# 4. Start the dev server
 pnpm dev
 ```
 
-Open [localhost:4731](http://localhost:4731). Sign in with GitHub to start tracking your activity.
+Then open [localhost:4731](http://localhost:4731) and sign in with GitHub.
 
 <details>
 <summary><strong>Environment variables</strong></summary>
@@ -65,67 +63,43 @@ Open [localhost:4731](http://localhost:4731). Sign in with GitHub to start track
 | `AUTH_GITHUB_ID` | GitHub OAuth app client ID |
 | `AUTH_GITHUB_SECRET` | GitHub OAuth app client secret |
 
-Create a GitHub OAuth app at [github.com/settings/developers](https://github.com/settings/developers) with callback URL `http://localhost:4731/api/auth/callback/github`.
+You'll need to create a GitHub OAuth app at [github.com/settings/developers](https://github.com/settings/developers) with the callback URL set to `http://localhost:4731/api/auth/callback/github`.
 
 </details>
+
+## How it works
+
+1. You sign in with GitHub OAuth (`repo`, `read:user`, `read:org` scopes)
+2. The app fetches your commits, PRs, and reviews from the GitHub API — commits use a hybrid approach (Events API + Search API) for better coverage
+3. Results get cached in Postgres with a 15-min TTL so you're not hammering the API
+4. tRPC serves the data to the frontend where React Query handles caching, polling, and keeping things fresh
 
 ## Project Structure
 
 ```
-github-activity-tracker/
-├── src/
-│   ├── app/                  Next.js App Router
-│   │   ├── dashboard/        Dashboard pages (overview, commits, PRs, reviews, repos, settings)
-│   │   └── api/              Auth and tRPC route handlers
-│   ├── components/
-│   │   ├── dashboard/        Metric cards, activity feed, filters, badges
-│   │   └── ui/               shadcn/ui primitives
-│   ├── server/
-│   │   ├── api/routers/      tRPC routers (github, settings)
-│   │   ├── services/         GitHub API client, cache layer
-│   │   └── auth/             NextAuth configuration
-│   ├── trpc/                 Client and server tRPC setup
-│   └── hooks/                Auto-refresh polling, mobile detection
-├── prisma/
-│   └── schema.prisma         Database schema
-└── public/                   Favicon and static assets
+src/
+├── app/                  Next.js pages and API routes
+│   ├── dashboard/        All the dashboard views
+│   └── api/              Auth + tRPC handlers
+├── components/           UI components (shadcn/ui + custom dashboard pieces)
+├── server/
+│   ├── api/routers/      tRPC routers for github data and settings
+│   ├── services/         GitHub API client and cache layer
+│   └── auth/             NextAuth config
+├── trpc/                 Client/server tRPC setup
+└── hooks/                Auto-refresh polling, etc.
 ```
-
-## Tech Stack
-
-| Layer | Choice |
-|---|---|
-| Framework | Next.js 15 (App Router, Turbopack) |
-| Language | TypeScript 5 |
-| UI | React 19, Tailwind CSS 4, shadcn/ui, Radix UI |
-| Icons | HugeIcons |
-| API | tRPC 11 (end-to-end type safety) |
-| Data fetching | TanStack React Query 5 |
-| Virtualization | TanStack Virtual |
-| Database | PostgreSQL, Prisma 6 |
-| Auth | NextAuth 5 (GitHub OAuth) |
-| Testing | Vitest |
-| Linting | ESLint 9, Prettier |
-
-## How It Works
-
-1. **Authenticate** — user signs in with GitHub OAuth, granting `repo`, `read:user`, and `read:org` scopes.
-2. **Fetch** — the GitHub service fetches commits (hybrid Events + Search API), PRs, and reviews with pagination (up to 10 pages per type).
-3. **Cache** — results are cached in PostgreSQL with a 15-minute TTL to stay within GitHub's rate limits.
-4. **Serve** — tRPC routers expose typed queries; React Query handles client-side caching, polling, and stale data management.
-5. **Render** — dashboard pages display data in virtualized lists with filter chips for date ranges and states.
 
 ## Scripts
 
-| Command | Description |
+| Command | What it does |
 |---|---|
-| `pnpm dev` | Start dev server with Turbopack on port 4731 |
+| `pnpm dev` | Dev server on port 4731 |
 | `pnpm build` | Production build |
 | `pnpm check` | Lint + typecheck |
-| `pnpm test` | Run tests with Vitest |
-| `pnpm db:push` | Push Prisma schema to database |
+| `pnpm test` | Run tests |
+| `pnpm db:push` | Push schema to database |
 | `pnpm db:studio` | Open Prisma Studio |
-| `pnpm format:write` | Format code with Prettier |
 
 ## License
 
