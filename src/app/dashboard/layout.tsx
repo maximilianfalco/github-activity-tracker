@@ -20,6 +20,7 @@ export default async function DashboardLayout({
   void api.github.getPullRequests.prefetch({ dateRange: "7d" });
   void api.github.getReviews.prefetch({ dateRange: "1d" });
   void api.github.getRepoBreakdown.prefetch();
+  void api.github.getRecap.prefetch();
   void api.settings.get.prefetch();
 
   return (

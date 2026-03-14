@@ -123,6 +123,67 @@ export const githubRouter = createTRPCRouter({
       .toSorted((a, b) => b.total - a.total);
   }),
 
+  getRecap: protectedProcedure.query(async ({ ctx }) => {
+    const { data, stale } = await getCachedActivity(ctx.db, ctx.session.user.id);
+
+    let items = data;
+    if (stale) {
+      try {
+        const { token, login } = await getTokenAndLogin(ctx);
+        await refreshCache(ctx.db, ctx.session.user.id, token, login);
+        const fresh = await getCachedActivity(ctx.db, ctx.session.user.id);
+        items = fresh.data;
+      } catch {
+        // fall through with stale data
+      }
+    }
+
+    const settings = await ctx.db.userSettings.findUnique({
+      where: { userId: ctx.session.user.id },
+    });
+    const savedRepos = settings?.recapIncludedRepos ?? [];
+
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const allRepoNames = [...new Set(items.map((d) => d.repoName))].toSorted();
+
+    const activeRepoNames = [
+      ...new Set(
+        items.filter((d) => d.createdAt >= cutoff).map((d) => d.repoName),
+      ),
+    ];
+
+    const effectiveIncluded =
+      savedRepos.length > 0 ? savedRepos : activeRepoNames;
+    const included = new Set<string>(effectiveIncluded);
+
+    const filtered = items
+      .filter((d) => d.createdAt >= cutoff && included.has(d.repoName))
+      .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    const commits = filtered.filter((d) => d.type === "commit");
+    const prs = filtered.filter((d) => d.type === "pr");
+    const reviews = filtered.filter((d) => d.type === "review");
+
+    const repoMap = new Map<string, number>();
+    for (const item of filtered) {
+      repoMap.set(item.repoName, (repoMap.get(item.repoName) ?? 0) + 1);
+    }
+
+    return {
+      commitCount: commits.length,
+      prCount: prs.length,
+      reviewCount: reviews.length,
+      commits,
+      prs,
+      reviews,
+      activeRepos: [...repoMap.entries()]
+        .map(([name, count]) => ({ name, count }))
+        .toSorted((a, b) => b.count - a.count),
+      allRepos: allRepoNames,
+      includedRepos: effectiveIncluded,
+    };
+  }),
+
   refresh: protectedProcedure.mutation(async ({ ctx }) => {
     try {
       const { token, login } = await getTokenAndLogin(ctx);

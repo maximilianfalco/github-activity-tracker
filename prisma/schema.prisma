@@ -80,7 +80,8 @@ model UserSettings {
     defaultWindow Int     @default(30)
     autoRefresh   Boolean @default(true)
     notifyReviews Boolean @default(true)
-    notifyStatus  Boolean @default(false)
+    notifyStatus       Boolean  @default(false)
+    recapIncludedRepos String[] @default([])
 
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
