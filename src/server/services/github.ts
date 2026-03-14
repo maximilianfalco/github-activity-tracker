@@ -160,31 +160,45 @@ async function fetchCommitsFromEvents(
     page++;
   }
 
+  const BASE_BRANCHES = new Set(["main", "master", "next", "develop", "dev"]);
+  const branchKeys = [...branches.keys()].toSorted((a, b) => {
+    const branchA = splitRepoBranch(a)[1];
+    const branchB = splitRepoBranch(b)[1];
+    const aBase = BASE_BRANCHES.has(branchA) ? 0 : 1;
+    const bBase = BASE_BRANCHES.has(branchB) ? 0 : 1;
+    return aBase - bBase;
+  });
+
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-  const branchCommits = await Promise.all(
-    [...branches.keys()].map(async (key) => {
-      const [repoName, branch] = splitRepoBranch(key);
-      try {
-        const res = await githubFetch(
-          token,
-          `${GITHUB_API}/repos/${repoName}/commits?author=${login}&sha=${encodeURIComponent(branch)}&per_page=100&since=${since}`,
-        );
-        const items = (await res.json()) as GitHubRepoCommit[];
-        return items.map((c) => ({
+  const seen = new Set<string>();
+  const result: Commit[] = [];
+
+  for (const key of branchKeys) {
+    const [repoName, branch] = splitRepoBranch(key);
+    try {
+      const res = await githubFetch(
+        token,
+        `${GITHUB_API}/repos/${repoName}/commits?author=${login}&sha=${encodeURIComponent(branch)}&per_page=100&since=${since}`,
+      );
+      const items = (await res.json()) as GitHubRepoCommit[];
+      for (const c of items) {
+        if (seen.has(c.sha)) continue;
+        seen.add(c.sha);
+        result.push({
           sha: c.sha,
           message: c.commit.message.split("\n")[0]!,
           repoName,
           branch,
           url: c.html_url,
           createdAt: new Date(c.commit.author.date),
-        }));
-      } catch {
-        return [];
+        });
       }
-    }),
-  );
+    } catch {
+      // skip branch on error
+    }
+  }
 
-  return branchCommits.flat();
+  return result;
 }
 
 function splitRepoBranch(key: string): [string, string] {
