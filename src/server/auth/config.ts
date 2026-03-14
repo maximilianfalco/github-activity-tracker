@@ -38,7 +38,7 @@ export const authConfig = {
           id: user.id,
         },
         accessToken: account?.access_token ?? null,
-        githubLogin: account?.providerAccountId ?? null,
+        githubLogin: null,
       };
     },
   },
