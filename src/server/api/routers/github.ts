@@ -5,10 +5,10 @@ import { getCachedActivity, refreshCache } from "~/server/services/cache";
 import { fetchLogin } from "~/server/services/github";
 import { GitHubRateLimitError } from "~/server/services/github.types";
 
-const dateRangeSchema = z.enum(["7d", "30d", "90d"]).default("30d");
+const dateRangeSchema = z.enum(["1d", "7d", "30d", "90d"]).default("30d");
 
-function daysAgo(range: "7d" | "30d" | "90d"): Date {
-  const days = { "7d": 7, "30d": 30, "90d": 90 }[range];
+function daysAgo(range: "1d" | "7d" | "30d" | "90d"): Date {
+  const days = { "1d": 2, "7d": 7, "30d": 30, "90d": 90 }[range];
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
@@ -93,12 +93,22 @@ export const githubRouter = createTRPCRouter({
 
   getRepoBreakdown: protectedProcedure.query(async ({ ctx }) => {
     const { data } = await getCachedActivity(ctx.db, ctx.session.user.id);
-    const repoMap = new Map<string, { commits: number; prs: number }>();
+    const repoMap = new Map<
+      string,
+      { commits: number; prs: number; lastActivityAt: Date }
+    >();
 
     for (const entry of data) {
-      const existing = repoMap.get(entry.repoName) ?? { commits: 0, prs: 0 };
+      const existing = repoMap.get(entry.repoName) ?? {
+        commits: 0,
+        prs: 0,
+        lastActivityAt: new Date(0),
+      };
       if (entry.type === "commit") existing.commits++;
       if (entry.type === "pr") existing.prs++;
+      if (entry.createdAt > existing.lastActivityAt) {
+        existing.lastActivityAt = entry.createdAt;
+      }
       repoMap.set(entry.repoName, existing);
     }
 
@@ -108,8 +118,9 @@ export const githubRouter = createTRPCRouter({
         commits: stats.commits,
         prs: stats.prs,
         total: stats.commits + stats.prs,
+        lastActivityAt: stats.lastActivityAt,
       }))
-      .sort((a, b) => b.total - a.total);
+      .toSorted((a, b) => b.total - a.total);
   }),
 
   refresh: protectedProcedure.mutation(async ({ ctx }) => {
