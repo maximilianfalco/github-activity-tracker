@@ -1,0 +1,11 @@
+FROM node:22-alpine
+RUN apk add --no-cache libc6-compat
+RUN corepack enable && corepack prepare pnpm@10 --activate
+
+WORKDIR /app
+COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
+RUN pnpm install --frozen-lockfile
+
+EXPOSE 4731
+CMD ["sh", "-c", "pnpm db:push --skip-generate && pnpm dev"]

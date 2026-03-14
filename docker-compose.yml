@@ -16,11 +16,32 @@ services:
       timeout: 5s
       retries: 5
 
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    ports:
+      - "4731:4731"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+      - /app/generated
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://github_dash:local_dev_password@db:5432/github_dash
+    depends_on:
+      db:
+        condition: service_healthy
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    profiles:
+      - prod
     ports:
       - "4731:4731"
     environment:
