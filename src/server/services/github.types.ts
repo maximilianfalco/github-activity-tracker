@@ -4,6 +4,7 @@ export interface Commit {
   sha: string;
   message: string;
   repoName: string;
+  branch: string | null;
   url: string;
   createdAt: Date;
 }
@@ -29,11 +30,25 @@ export interface GitHubEvent {
   repo: { name: string };
   created_at: string;
   payload: {
+    ref?: string;
+    head?: string;
+    before?: string;
     commits?: Array<{
       sha: string;
       message: string;
       url: string;
     }>;
+  };
+}
+
+export interface GitHubRepoCommit {
+  sha: string;
+  html_url: string;
+  commit: {
+    message: string;
+    author: {
+      date: string;
+    };
   };
 }
 
@@ -51,6 +66,25 @@ export interface GitHubSearchItem {
   pull_request?: {
     merged_at: string | null;
   };
+}
+
+export interface GitHubSearchCommitItem {
+  sha: string;
+  html_url: string;
+  commit: {
+    message: string;
+    author: {
+      date: string;
+    };
+  };
+  repository: {
+    full_name: string;
+  };
+}
+
+export interface GitHubSearchCommitResponse {
+  total_count: number;
+  items: GitHubSearchCommitItem[];
 }
 
 export interface GitHubUser {

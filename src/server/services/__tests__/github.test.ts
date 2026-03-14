@@ -4,10 +4,15 @@ import {
   mapPushEventToCommits,
   mapSearchItemToPR,
   mapSearchItemToReview,
+  mapSearchCommitToCommit,
   extractRepoName,
 } from "../github";
 import { isCacheStale, CACHE_TTL_MS } from "../cache";
-import type { GitHubEvent, GitHubSearchItem } from "../github.types";
+import type {
+  GitHubEvent,
+  GitHubSearchItem,
+  GitHubSearchCommitItem,
+} from "../github.types";
 
 describe("parseNextUrl", () => {
   it("extracts next URL from Link header", () => {
@@ -63,6 +68,7 @@ describe("mapPushEventToCommits", () => {
     repo: { name: "owner/repo" },
     created_at: "2024-01-15T10:00:00Z",
     payload: {
+      ref: "refs/heads/main",
       commits: [
         {
           sha: "abc123def456",
@@ -80,6 +86,7 @@ describe("mapPushEventToCommits", () => {
       sha: "abc123def456",
       message: "fix: resolve bug",
       repoName: "owner/repo",
+      branch: "main",
       url: "https://github.com/owner/repo/commit/abc123def456",
       createdAt: new Date("2024-01-15T10:00:00Z"),
     });
@@ -188,6 +195,44 @@ describe("mapSearchItemToReview", () => {
     const review = mapSearchItemToReview(item);
     expect(review.state).toBe("merged");
     expect(review.repoName).toBe("owner/repo");
+  });
+});
+
+describe("mapSearchCommitToCommit", () => {
+  const baseItem: GitHubSearchCommitItem = {
+    sha: "abc123def456",
+    html_url: "https://github.com/owner/repo/commit/abc123def456",
+    commit: {
+      message: "feat: add new feature\n\nDetailed body here",
+      author: { date: "2024-01-15T10:00:00Z" },
+    },
+    repository: { full_name: "owner/repo" },
+  };
+
+  it("maps search commit item correctly", () => {
+    const commit = mapSearchCommitToCommit(baseItem);
+    expect(commit).toEqual({
+      sha: "abc123def456",
+      message: "feat: add new feature",
+      repoName: "owner/repo",
+      branch: null,
+      url: "https://github.com/owner/repo/commit/abc123def456",
+      createdAt: new Date("2024-01-15T10:00:00Z"),
+    });
+  });
+
+  it("takes only first line of multi-line commit message", () => {
+    const commit = mapSearchCommitToCommit(baseItem);
+    expect(commit.message).toBe("feat: add new feature");
+    expect(commit.message).not.toContain("Detailed body");
+  });
+
+  it("handles single-line commit message", () => {
+    const item: GitHubSearchCommitItem = {
+      ...baseItem,
+      commit: { ...baseItem.commit, message: "simple fix" },
+    };
+    expect(mapSearchCommitToCommit(item).message).toBe("simple fix");
   });
 });
 

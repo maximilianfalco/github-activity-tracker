@@ -3,8 +3,11 @@ import type {
   PullRequest,
   Review,
   GitHubEvent,
+  GitHubRepoCommit,
   GitHubSearchResponse,
   GitHubSearchItem,
+  GitHubSearchCommitResponse,
+  GitHubSearchCommitItem,
   GitHubUser,
 } from "./github.types";
 import { GitHubRateLimitError } from "./github.types";
@@ -26,10 +29,12 @@ export function extractRepoName(repositoryUrl: string): string {
 
 export function mapPushEventToCommits(event: GitHubEvent): Commit[] {
   if (event.type !== "PushEvent" || !event.payload.commits) return [];
+  const branch = event.payload.ref?.replace("refs/heads/", "") ?? null;
   return event.payload.commits.map((c) => ({
     sha: c.sha,
     message: c.message.split("\n")[0]!,
     repoName: event.repo.name,
+    branch,
     url: `https://github.com/${event.repo.name}/commit/${c.sha}`,
     createdAt: new Date(event.created_at),
   }));
@@ -56,6 +61,20 @@ export function mapSearchItemToPR(item: GitHubSearchItem): PullRequest {
 
 export function mapSearchItemToReview(item: GitHubSearchItem): Review {
   return mapSearchItemToPR(item);
+}
+
+export function mapSearchCommitToCommit(
+  item: GitHubSearchCommitItem,
+  branch?: string,
+): Commit {
+  return {
+    sha: item.sha,
+    message: item.commit.message.split("\n")[0]!,
+    repoName: item.repository.full_name,
+    branch: branch ?? null,
+    url: item.html_url,
+    createdAt: new Date(item.commit.author.date),
+  };
 }
 
 // --- API client ---
@@ -98,7 +117,30 @@ export async function fetchCommits(
   token: string,
   login: string,
 ): Promise<Commit[]> {
-  const commits: Commit[] = [];
+  const [eventCommits, searchCommits] = await Promise.all([
+    fetchCommitsFromEvents(token, login),
+    fetchCommitsFromSearch(token, login),
+  ]);
+
+  const seen = new Set<string>();
+  const merged: Commit[] = [];
+  for (const commit of [...eventCommits, ...searchCommits]) {
+    if (!seen.has(commit.sha)) {
+      seen.add(commit.sha);
+      merged.push(commit);
+    }
+  }
+
+  return merged.toSorted(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+  );
+}
+
+async function fetchCommitsFromEvents(
+  token: string,
+  login: string,
+): Promise<Commit[]> {
+  const branches = new Map<string, string>();
   let url: string | null =
     `${GITHUB_API}/users/${login}/events?per_page=100`;
   let page = 0;
@@ -107,8 +149,62 @@ export async function fetchCommits(
     const response = await githubFetch(token, url);
     const events = (await response.json()) as GitHubEvent[];
     for (const event of events) {
-      commits.push(...mapPushEventToCommits(event));
+      if (event.type !== "PushEvent" || !event.payload.ref) continue;
+      const branch = event.payload.ref.replace("refs/heads/", "");
+      const key = `${event.repo.name}:${branch}`;
+      if (!branches.has(key)) {
+        branches.set(key, `${event.repo.name}:${branch}`);
+      }
     }
+    url = parseNextUrl(response.headers.get("link"));
+    page++;
+  }
+
+  const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const branchCommits = await Promise.all(
+    [...branches.keys()].map(async (key) => {
+      const [repoName, branch] = splitRepoBranch(key);
+      try {
+        const res = await githubFetch(
+          token,
+          `${GITHUB_API}/repos/${repoName}/commits?author=${login}&sha=${encodeURIComponent(branch)}&per_page=100&since=${since}`,
+        );
+        const items = (await res.json()) as GitHubRepoCommit[];
+        return items.map((c) => ({
+          sha: c.sha,
+          message: c.commit.message.split("\n")[0]!,
+          repoName,
+          branch,
+          url: c.html_url,
+          createdAt: new Date(c.commit.author.date),
+        }));
+      } catch {
+        return [];
+      }
+    }),
+  );
+
+  return branchCommits.flat();
+}
+
+function splitRepoBranch(key: string): [string, string] {
+  const idx = key.indexOf(":", key.indexOf("/") + 1);
+  return [key.slice(0, idx), key.slice(idx + 1)];
+}
+
+async function fetchCommitsFromSearch(
+  token: string,
+  login: string,
+): Promise<Commit[]> {
+  const commits: Commit[] = [];
+  let url: string | null =
+    `${GITHUB_API}/search/commits?q=${encodeURIComponent(`author:${login}`)}&sort=author-date&order=desc&per_page=100`;
+  let page = 0;
+
+  while (url && page < 3) {
+    const response = await githubFetch(token, url);
+    const data = (await response.json()) as GitHubSearchCommitResponse;
+    commits.push(...data.items.map((item) => mapSearchCommitToCommit(item)));
     url = parseNextUrl(response.headers.get("link"));
     page++;
   }

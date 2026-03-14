@@ -64,6 +64,7 @@ model ActivityCache {
     url       String
     state     String?  // "open" | "merged" | "closed"
     sha       String?
+    branch    String?
     createdAt DateTime
     fetchedAt DateTime @default(now())
 

@@ -55,6 +55,7 @@ export async function refreshCache(
       title: c.message,
       url: c.url,
       sha: c.sha,
+      branch: c.branch,
       state: null as string | null,
       createdAt: c.createdAt,
     })),
@@ -66,6 +67,7 @@ export async function refreshCache(
       url: p.url,
       state: p.state as string | null,
       sha: null as string | null,
+      branch: null as string | null,
       createdAt: p.createdAt,
     })),
     ...reviews.map((r) => ({
@@ -76,6 +78,7 @@ export async function refreshCache(
       url: r.url,
       state: r.state as string | null,
       sha: null as string | null,
+      branch: null as string | null,
       createdAt: r.createdAt,
     })),
   ];
