@@ -68,54 +68,50 @@ export default function SettingsPage() {
     },
   });
 
-  if (settings.isLoading) {
-    return (
-      <>
-        <Topbar title="Settings" />
-        <div className="space-y-4 p-6">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-8 w-full" />
-          ))}
-        </div>
-      </>
-    );
-  }
-
   const data = settings.data;
-  if (!data) return null;
 
   return (
     <>
       <Topbar title="Settings" />
       <div className="max-w-lg p-6">
-        <SettingsGroup title="Data range">
-          <SettingsRow label="Default window">
-            <span className="font-mono text-xs">
-              {data.defaultWindow} days
-            </span>
-          </SettingsRow>
-          <SettingsRow label="Auto-refresh">
-            <Toggle
-              checked={data.autoRefresh}
-              onChange={(val) => update.mutate({ autoRefresh: val })}
-            />
-          </SettingsRow>
-        </SettingsGroup>
+        {settings.isLoading ? (
+          <div className="space-y-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-8 w-full" />
+            ))}
+          </div>
+        ) : data ? (
+          <>
+            <SettingsGroup title="Data range">
+              <SettingsRow label="Default window">
+                <span className="font-mono text-xs">
+                  {data.defaultWindow} days
+                </span>
+              </SettingsRow>
+              <SettingsRow label="Auto-refresh">
+                <Toggle
+                  checked={data.autoRefresh}
+                  onChange={(val) => update.mutate({ autoRefresh: val })}
+                />
+              </SettingsRow>
+            </SettingsGroup>
 
-        <SettingsGroup title="Notifications">
-          <SettingsRow label="PR review requests">
-            <Toggle
-              checked={data.notifyReviews}
-              onChange={(val) => update.mutate({ notifyReviews: val })}
-            />
-          </SettingsRow>
-          <SettingsRow label="PR status changes">
-            <Toggle
-              checked={data.notifyStatus}
-              onChange={(val) => update.mutate({ notifyStatus: val })}
-            />
-          </SettingsRow>
-        </SettingsGroup>
+            <SettingsGroup title="Notifications">
+              <SettingsRow label="PR review requests">
+                <Toggle
+                  checked={data.notifyReviews}
+                  onChange={(val) => update.mutate({ notifyReviews: val })}
+                />
+              </SettingsRow>
+              <SettingsRow label="PR status changes">
+                <Toggle
+                  checked={data.notifyStatus}
+                  onChange={(val) => update.mutate({ notifyStatus: val })}
+                />
+              </SettingsRow>
+            </SettingsGroup>
+          </>
+        ) : null}
       </div>
     </>
   );

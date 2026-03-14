@@ -47,8 +47,15 @@ export async function refreshCache(
     fetchReviews(token, login),
   ]);
 
+  const seenSha = new Set<string>();
+  const dedupedCommits = commits.filter((c) => {
+    if (seenSha.has(c.sha)) return false;
+    seenSha.add(c.sha);
+    return true;
+  });
+
   const cacheEntries = [
-    ...commits.map((c) => ({
+    ...dedupedCommits.map((c) => ({
       userId,
       type: "commit" as const,
       repoName: c.repoName,
