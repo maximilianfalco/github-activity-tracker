@@ -1,8 +1,10 @@
 import { createCallerFactory, createTRPCRouter } from "~/server/api/trpc";
-import { publicProcedure } from "~/server/api/trpc";
+import { githubRouter } from "~/server/api/routers/github";
+import { settingsRouter } from "~/server/api/routers/settings";
 
 export const appRouter = createTRPCRouter({
-  health: publicProcedure.query(() => ({ status: "ok" })),
+  github: githubRouter,
+  settings: settingsRouter,
 });
 
 export type AppRouter = typeof appRouter;

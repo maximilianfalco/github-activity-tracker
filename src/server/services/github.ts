@@ -15,7 +15,7 @@ const GITHUB_API = "https://api.github.com";
 
 export function parseNextUrl(linkHeader: string | null): string | null {
   if (!linkHeader) return null;
-  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+  const match = /<([^>]+)>;\s*rel="next"/.exec(linkHeader);
   return match?.[1] ?? null;
 }
 
