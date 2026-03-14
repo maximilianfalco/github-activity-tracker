@@ -32,9 +32,9 @@ export default function ReviewsPage() {
   });
 
   return (
-    <>
+    <div className="flex h-full flex-col">
       <Topbar title="Reviews" />
-      <div className="p-6">
+      <div className="flex min-h-0 flex-1 flex-col p-6">
         <div className="mb-4 flex items-center justify-between">
           <FilterChips
             options={dateOptions}
@@ -54,7 +54,7 @@ export default function ReviewsPage() {
           <>
             <div
               ref={parentRef}
-              className="max-h-[calc(100vh-16rem)] overflow-y-auto"
+              className="min-h-0 flex-1 overflow-y-auto"
             >
               <div
                 className="relative w-full"
@@ -98,6 +98,6 @@ export default function ReviewsPage() {
           </p>
         )}
       </div>
-    </>
+    </div>
   );
 }

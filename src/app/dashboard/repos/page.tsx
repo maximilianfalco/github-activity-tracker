@@ -40,9 +40,9 @@ export default function ReposPage() {
   });
 
   return (
-    <>
+    <div className="flex h-full flex-col">
       <Topbar title="Repos" />
-      <div className="p-6">
+      <div className="flex min-h-0 flex-1 flex-col p-6">
         {repos.isLoading ? (
           <div className="space-y-3">
             {Array.from({ length: 5 }).map((_, i) => (
@@ -67,7 +67,7 @@ export default function ReposPage() {
             </div>
             <div
               ref={parentRef}
-              className="max-h-[calc(100vh-16rem)] overflow-y-auto"
+              className="min-h-0 flex-1 overflow-y-auto"
             >
               <div
                 className="relative w-full"
@@ -102,6 +102,6 @@ export default function ReposPage() {
           </p>
         )}
       </div>
-    </>
+    </div>
   );
 }

@@ -48,9 +48,9 @@ export default function PullRequestsPage() {
   });
 
   return (
-    <>
+    <div className="flex h-full flex-col">
       <Topbar title="Pull requests" />
-      <div className="p-6">
+      <div className="flex min-h-0 flex-1 flex-col p-6">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="flex flex-wrap gap-3">
             <FilterChips
@@ -77,7 +77,7 @@ export default function PullRequestsPage() {
           <>
             <div
               ref={parentRef}
-            className="max-h-[calc(100vh-14rem)] overflow-y-auto"
+            className="min-h-0 flex-1 overflow-y-auto"
           >
             <div
               className="relative w-full"
@@ -121,6 +121,6 @@ export default function PullRequestsPage() {
           </p>
         )}
       </div>
-    </>
+    </div>
   );
 }
