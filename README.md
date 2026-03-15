@@ -39,7 +39,7 @@ Everything auto-refreshes and results are cached so you don't burn through GitHu
 
 ## Quick Start
 
-You'll need Node.js 22+, pnpm, and PostgreSQL.
+You'll need Node.js 22+, pnpm, PostgreSQL, and Go 1.24+ if you want to use the local CLI.
 
 ```bash
 git clone https://github.com/maximilianfalco/github-activity-tracker.git
@@ -75,7 +75,8 @@ Run it and you get a menu-driven terminal version of the tracker:
 - reuse the saved GitHub token if one already exists
 - open GitHub OAuth in your browser from the terminal with device flow
 - read and write the same cached activity and user settings as the web app
-- give you selectable menus so you don't need to memorize flags
+- give you arrow-key menus powered by Charm's `huh`
+- use `lipgloss` styling for headings, status messages, and output sections
 
 You can jump into:
 
@@ -88,6 +89,7 @@ You can jump into:
 - Recap
 - Refresh GitHub data
 - Settings
+- Recap repo filtering in Settings so your standup only uses the repos you care about
 - Switch user
 - Logout everywhere
 
@@ -128,6 +130,16 @@ You'll need to create a GitHub OAuth app at [github.com/settings/developers](htt
 ## Project Structure
 
 ```
+cmd/
+├── ghat/                 Go CLI entrypoint
+internal/
+├── ai/                   Recap generation client
+├── app/                  CLI command flow, menus, and output rendering
+├── auth/                 Shared local auth/user resolution
+├── config/               Runtime env loading for the CLI
+├── data/                 PostgreSQL reads/writes for users, settings, and cache
+├── domain/               Activity filtering, summaries, and recap prep
+└── github/               GitHub API + OAuth device flow client
 src/
 ├── app/                  Next.js pages and API routes
 │   ├── dashboard/        All the dashboard views
