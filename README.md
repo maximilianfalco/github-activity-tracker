@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/favicon.svg" width="80" height="80" alt="GitHub Activity Tracker"/>
+  <img src="public/logo.png" width="80" height="80" alt="GitHub Activity Tracker" style="border-radius: 50%"/>
 </p>
 
 <h1 align="center">GitHub Activity Tracker</h1>

@@ -12,7 +12,7 @@ const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 export const metadata: Metadata = {
   title: "GitHub Activity Dashboard",
   description: "Personal GitHub activity tracker",
-  icons: [{ rel: "icon", url: "/favicon.svg", type: "image/svg+xml" }],
+  icons: [{ rel: "icon", url: "/logo.png", type: "image/png" }],
 };
 
 export default function RootLayout({
