@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -16,10 +17,32 @@ import (
 )
 
 const apiBase = "https://api.github.com"
+const deviceCodeEndpoint = "https://github.com/login/device/code"
+const deviceAccessTokenEndpoint = "https://github.com/login/oauth/access_token"
 
 type Client struct {
 	token string
 	http  *http.Client
+}
+
+type DeviceAuthorization struct {
+	DeviceCode      string `json:"device_code"`
+	UserCode        string `json:"user_code"`
+	VerificationURI string `json:"verification_uri"`
+	ExpiresIn       int    `json:"expires_in"`
+	Interval        int    `json:"interval"`
+}
+
+type DeviceToken struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	Scope       string `json:"scope"`
+}
+
+type deviceFlowError struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+	ErrorURI         string `json:"error_uri"`
 }
 
 type Commit struct {
@@ -109,6 +132,146 @@ func NewClient(token string) *Client {
 			Timeout: 20 * time.Second,
 		},
 	}
+}
+
+func StartDeviceFlow(ctx context.Context, clientID string) (DeviceAuthorization, error) {
+	form := url.Values{}
+	form.Set("client_id", strings.TrimSpace(clientID))
+	form.Set("scope", "repo read:user read:org")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, deviceCodeEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return DeviceAuthorization{}, fmt.Errorf("build device flow request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := &http.Client{Timeout: 20 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return DeviceAuthorization{}, fmt.Errorf("request device code: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return DeviceAuthorization{}, parseDeviceFlowError(resp.Body, "request device code", resp.StatusCode)
+	}
+
+	var payload DeviceAuthorization
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return DeviceAuthorization{}, fmt.Errorf("decode device code response: %w", err)
+	}
+	if payload.DeviceCode == "" || payload.UserCode == "" || payload.VerificationURI == "" {
+		return DeviceAuthorization{}, errors.New("device flow response was missing required fields")
+	}
+	if payload.Interval <= 0 {
+		payload.Interval = 5
+	}
+	return payload, nil
+}
+
+func PollDeviceFlow(ctx context.Context, clientID string, auth DeviceAuthorization) (DeviceToken, error) {
+	interval := time.Duration(auth.Interval) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+
+	expiresAt := time.Now().Add(time.Duration(auth.ExpiresIn) * time.Second)
+	for {
+		token, wait, done, err := pollDeviceTokenOnce(ctx, clientID, auth.DeviceCode)
+		if err != nil {
+			return DeviceToken{}, err
+		}
+		if done {
+			return token, nil
+		}
+		if wait > 0 {
+			interval = wait
+		}
+		if !expiresAt.IsZero() && time.Now().After(expiresAt) {
+			return DeviceToken{}, errors.New("device code expired before authorization completed")
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return DeviceToken{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func pollDeviceTokenOnce(ctx context.Context, clientID, deviceCode string) (DeviceToken, time.Duration, bool, error) {
+	form := url.Values{}
+	form.Set("client_id", strings.TrimSpace(clientID))
+	form.Set("device_code", strings.TrimSpace(deviceCode))
+	form.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, deviceAccessTokenEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return DeviceToken{}, 0, false, fmt.Errorf("build device token request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := &http.Client{Timeout: 20 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return DeviceToken{}, 0, false, fmt.Errorf("poll device token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return DeviceToken{}, 0, false, fmt.Errorf("read device token response: %w", err)
+	}
+
+	var token DeviceToken
+	if err := json.Unmarshal(body, &token); err == nil && token.AccessToken != "" {
+		return token, 0, true, nil
+	}
+
+	var apiErr deviceFlowError
+	if err := json.Unmarshal(body, &apiErr); err != nil {
+		return DeviceToken{}, 0, false, fmt.Errorf("decode device token response: %w", err)
+	}
+
+	switch apiErr.Error {
+	case "authorization_pending":
+		return DeviceToken{}, 0, false, nil
+	case "slow_down":
+		return DeviceToken{}, 10 * time.Second, false, nil
+	case "expired_token":
+		return DeviceToken{}, 0, false, errors.New("device code expired before authorization completed")
+	case "access_denied":
+		return DeviceToken{}, 0, false, errors.New("authorization was denied in GitHub")
+	default:
+		if apiErr.ErrorDescription != "" {
+			return DeviceToken{}, 0, false, fmt.Errorf("device flow failed: %s", apiErr.ErrorDescription)
+		}
+		if apiErr.Error != "" {
+			return DeviceToken{}, 0, false, fmt.Errorf("device flow failed: %s", apiErr.Error)
+		}
+		return DeviceToken{}, 0, false, fmt.Errorf("device flow failed with status %d", resp.StatusCode)
+	}
+}
+
+func parseDeviceFlowError(body io.Reader, operation string, statusCode int) error {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return fmt.Errorf("%s: status %d", operation, statusCode)
+	}
+	var apiErr deviceFlowError
+	if err := json.Unmarshal(raw, &apiErr); err == nil {
+		if apiErr.ErrorDescription != "" {
+			return fmt.Errorf("%s: %s", operation, apiErr.ErrorDescription)
+		}
+		if apiErr.Error != "" {
+			return fmt.Errorf("%s: %s", operation, apiErr.Error)
+		}
+	}
+	return fmt.Errorf("%s: status %d", operation, statusCode)
 }
 
 func (c *Client) FetchLogin(ctx context.Context) (string, error) {

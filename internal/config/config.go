@@ -14,6 +14,7 @@ import (
 type RuntimeConfig struct {
 	DatabaseURL  string
 	OpenAIAPIKey string
+	AuthGitHubID string
 	LocalConfig  *LocalConfig
 }
 
@@ -38,6 +39,7 @@ func LoadRuntimeConfig() (*RuntimeConfig, error) {
 	return &RuntimeConfig{
 		DatabaseURL:  databaseURL,
 		OpenAIAPIKey: strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+		AuthGitHubID: strings.TrimSpace(os.Getenv("AUTH_GITHUB_ID")),
 		LocalConfig:  localConfig,
 	}, nil
 }
