@@ -32,6 +32,8 @@ Sign in with GitHub and you get a dashboard showing everything you've been up to
 - **Pull Requests** — see your PRs filtered by open, merged, or closed
 - **Reviews** — PRs you've reviewed
 - **Repos** — activity broken down by repository, sortable by activity or recency
+- **Recap** — AI-generated standup recaps from your recent activity (24h–72h configurable), filterable by activity type (commits, PRs, reviews) and repo, with a custom rule editor so you can control the tone, format, and style of the output
+- **Settings** — configure default time windows, notifications, and your custom AI recap rule, saved with a single form submit
 
 Everything auto-refreshes and results are cached so you don't burn through GitHub's rate limits.
 
@@ -62,6 +64,7 @@ Then open [localhost:4731](http://localhost:4731) and sign in with GitHub.
 | `AUTH_SECRET` | NextAuth secret (generate with `openssl rand -base64 32`) |
 | `AUTH_GITHUB_ID` | GitHub OAuth app client ID |
 | `AUTH_GITHUB_SECRET` | GitHub OAuth app client secret |
+| `OPENAI_API_KEY` | OpenAI API key (used for AI recap generation) |
 
 You'll need to create a GitHub OAuth app at [github.com/settings/developers](https://github.com/settings/developers) with the callback URL set to `http://localhost:4731/api/auth/callback/github`.
 
@@ -73,6 +76,7 @@ You'll need to create a GitHub OAuth app at [github.com/settings/developers](htt
 2. The app fetches your commits, PRs, and reviews from the GitHub API — commits use a hybrid approach (Events API + Search API) for better coverage
 3. Results get cached in Postgres with a 15-min TTL so you're not hammering the API
 4. tRPC serves the data to the frontend where React Query handles caching, polling, and keeping things fresh
+5. The recap page sends your filtered activity to an AI model (GPT-4o-mini) with your custom style instructions to generate a standup-ready summary you can copy or export as JSON
 
 ## Project Structure
 
