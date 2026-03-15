@@ -104,6 +104,9 @@ src/
 | `pnpm test` | Run tests |
 | `pnpm db:push` | Push schema to database |
 | `pnpm db:studio` | Open Prisma Studio |
+| `pnpm docker:dev` | Start dev containers (with hot reload) |
+| `pnpm docker:prod` | Start production containers |
+| `pnpm docker:build` | Build production Docker image |
 
 ## License
 
