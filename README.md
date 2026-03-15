@@ -55,6 +55,45 @@ pnpm dev
 
 Then open [localhost:4731](http://localhost:4731) and sign in with GitHub.
 
+## CLI Companion
+
+This repo also ships with a local CLI companion called `ghat` that plugs into the same database, cached activity, settings, and GitHub credentials as the web app.
+
+```bash
+pnpm ghat
+```
+
+Run it and you get a menu-driven terminal version of the tracker:
+
+- auto-detect your local GitHub-backed user from the shared database
+- reuse the saved GitHub token if one already exists
+- let you paste a token in the terminal if the shared account has no token yet
+- read and write the same cached activity and user settings as the web app
+- give you selectable menus so you don't need to memorize flags
+
+You can jump into:
+
+- Overview
+- Commits
+- Pull Requests
+- Reviews
+- Repos
+- Recap
+- Refresh GitHub data
+- Settings
+- Switch user
+- Logout everywhere
+
+If you want to skip the menu, you can also call commands directly:
+
+```bash
+go run ./cmd/ghat overview
+go run ./cmd/ghat commits
+go run ./cmd/ghat prs
+go run ./cmd/ghat recap
+go run ./cmd/ghat refresh
+```
+
 <details>
 <summary><strong>Environment variables</strong></summary>
 
@@ -102,6 +141,8 @@ src/
 | `pnpm build` | Production build |
 | `pnpm check` | Lint + typecheck |
 | `pnpm test` | Run tests |
+| `pnpm ghat` | Launch the interactive GitHub Activity Tracker CLI |
+| `pnpm ghat:test` | Run Go tests for the CLI companion |
 | `pnpm db:push` | Push schema to database |
 | `pnpm db:studio` | Open Prisma Studio |
 | `pnpm docker:dev` | Start dev containers (with hot reload) |

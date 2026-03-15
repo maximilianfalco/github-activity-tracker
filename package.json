@@ -13,6 +13,8 @@
     "dev": "next dev --turbo -p 4731",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
+    "ghat": "go run ./cmd/ghat",
+    "ghat:test": "go test ./...",
     "postinstall": "prisma generate",
     "lint": "next lint",
     "lint:fix": "next lint --fix",

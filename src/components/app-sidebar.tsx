@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 import Link from "next/link";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { GithubIcon } from "@hugeicons/core-free-icons";
@@ -47,6 +48,18 @@ export function AppSidebar({
   user: { name?: string | null; image?: string | null };
 }) {
   const pathname = usePathname();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    try {
+      setIsLoggingOut(true);
+      await fetch("/api/shared-logout", {
+        method: "POST",
+      });
+    } finally {
+      window.location.href = "/";
+    }
+  }
 
   return (
     <Sidebar>
@@ -89,18 +102,30 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4">
-        <div className="flex items-center gap-2">
-          <Avatar className="h-6 w-6">
-            <AvatarImage src={user.image ?? undefined} />
-            <AvatarFallback className="text-[10px]">
-              {user.name
-                ?.split(" ")
-                .map((n) => n[0])
-                .join("")
-                .toUpperCase() ?? "?"}
-            </AvatarFallback>
-          </Avatar>
-          <span className="text-muted-foreground text-xs">{user.name}</span>
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Avatar className="h-6 w-6">
+              <AvatarImage src={user.image ?? undefined} />
+              <AvatarFallback className="text-[10px]">
+                {user.name
+                  ?.split(" ")
+                  .map((n) => n[0])
+                  .join("")
+                  .toUpperCase() ?? "?"}
+              </AvatarFallback>
+            </Avatar>
+            <span className="text-muted-foreground text-xs">{user.name}</span>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start text-xs"
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+          >
+            {isLoggingOut ? "Logging out..." : "Log out everywhere"}
+          </Button>
         </div>
       </SidebarFooter>
     </Sidebar>
