@@ -47,7 +47,7 @@ cd github-activity-tracker
 pnpm install
 
 cp .env.example .env
-# fill in your DATABASE_URL, AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
+# fill in your DATABASE_URL, AUTH_SECRET, AUTH_GITHUB_ID, AUTH_GITHUB_SECRET
 
 pnpm db:push
 pnpm dev
@@ -63,16 +63,23 @@ This repo also ships with a local CLI companion called `ghat` that plugs into th
 pnpm ghat
 ```
 
+If you want to sign in directly from the terminal first, use:
+
+```bash
+pnpm ghat login
+```
+
 Run it and you get a menu-driven terminal version of the tracker:
 
 - auto-detect your local GitHub-backed user from the shared database
 - reuse the saved GitHub token if one already exists
-- let you paste a token in the terminal if the shared account has no token yet
+- open GitHub OAuth in your browser from the terminal with device flow
 - read and write the same cached activity and user settings as the web app
 - give you selectable menus so you don't need to memorize flags
 
 You can jump into:
 
+- Login with GitHub
 - Overview
 - Commits
 - Pull Requests
@@ -87,6 +94,7 @@ You can jump into:
 If you want to skip the menu, you can also call commands directly:
 
 ```bash
+go run ./cmd/ghat login
 go run ./cmd/ghat overview
 go run ./cmd/ghat commits
 go run ./cmd/ghat prs
@@ -105,7 +113,7 @@ go run ./cmd/ghat refresh
 | `AUTH_GITHUB_SECRET` | GitHub OAuth app client secret |
 | `OPENAI_API_KEY` | OpenAI API key (used for AI recap generation) |
 
-You'll need to create a GitHub OAuth app at [github.com/settings/developers](https://github.com/settings/developers) with the callback URL set to `http://localhost:4731/api/auth/callback/github`.
+You'll need to create a GitHub OAuth app at [github.com/settings/developers](https://github.com/settings/developers) with the callback URL set to `http://localhost:4731/api/auth/callback/github`. The same `AUTH_GITHUB_ID` is also used by the CLI device flow login.
 
 </details>
 
