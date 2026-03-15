@@ -15,6 +15,7 @@ export interface PullRequest {
   url: string;
   state: "open" | "merged" | "closed";
   createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface Review {
@@ -23,6 +24,7 @@ export interface Review {
   url: string;
   state: "open" | "merged" | "closed";
   createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface GitHubEvent {
@@ -62,6 +64,7 @@ export interface GitHubSearchItem {
   html_url: string;
   state: string;
   created_at: string;
+  updated_at: string;
   repository_url: string;
   pull_request?: {
     merged_at: string | null;

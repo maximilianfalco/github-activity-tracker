@@ -139,6 +139,7 @@ describe("mapSearchItemToPR", () => {
     html_url: "https://github.com/owner/repo/pull/42",
     state: "open",
     created_at: "2024-01-15T10:00:00Z",
+    updated_at: "2024-01-15T12:00:00Z",
     repository_url: "https://api.github.com/repos/owner/repo",
     pull_request: { merged_at: null },
   };
@@ -151,6 +152,7 @@ describe("mapSearchItemToPR", () => {
       url: "https://github.com/owner/repo/pull/42",
       state: "open",
       createdAt: new Date("2024-01-15T10:00:00Z"),
+      updatedAt: new Date("2024-01-15T12:00:00Z"),
     });
   });
 
@@ -189,6 +191,7 @@ describe("mapSearchItemToReview", () => {
       html_url: "https://github.com/owner/repo/pull/99",
       state: "closed",
       created_at: "2024-01-15T10:00:00Z",
+      updated_at: "2024-01-16T00:00:00Z",
       repository_url: "https://api.github.com/repos/owner/repo",
       pull_request: { merged_at: "2024-01-16T00:00:00Z" },
     };

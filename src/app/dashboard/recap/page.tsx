@@ -16,10 +16,22 @@ import {
   ROW_HEIGHT,
 } from "~/components/dashboard/activity-feed";
 import { RepoFilter } from "~/components/dashboard/repo-filter";
+import { ActivityTypeFilter } from "~/components/dashboard/activity-type-filter";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { SparklesIcon, Copy01Icon } from "@hugeicons/core-free-icons";
+import {
+  SparklesIcon,
+  Copy01Icon,
+  Download04Icon,
+  Share01Icon,
+} from "@hugeicons/core-free-icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
 
 const dotColors: Record<string, string> = {
   commit: "bg-green-500",
@@ -30,6 +42,7 @@ const dotColors: Record<string, string> = {
 interface ActivityItem {
   type: string;
   title: string;
+  url: string;
   repoName: string;
   branch: string | null;
   state: string | null;
@@ -53,7 +66,7 @@ function formatActivitiesForAI(items: ActivityItem[]): string {
     if (prs.length > 0) {
       lines.push("PRs:");
       for (const p of prs) {
-        lines.push(`  - "${p.title}" [${p.state ?? "unknown"}] (${timeAgo(p.createdAt)})`);
+        lines.push(`  - "${p.title}" [${p.state ?? "unknown"}] ${p.url} (${timeAgo(p.createdAt)})`);
       }
     }
 
@@ -61,7 +74,7 @@ function formatActivitiesForAI(items: ActivityItem[]): string {
     if (reviews.length > 0) {
       lines.push("Reviews:");
       for (const r of reviews) {
-        lines.push(`  - "${r.title}" [${r.state ?? "unknown"}] (${timeAgo(r.createdAt)})`);
+        lines.push(`  - "${r.title}" [${r.state ?? "unknown"}] ${r.url} (${timeAgo(r.createdAt)})`);
       }
     }
 
@@ -79,7 +92,7 @@ function formatActivitiesForAI(items: ActivityItem[]): string {
       for (const [branch, branchCommits] of branchMap) {
         lines.push(`  Branch: ${branch}`);
         for (const c of branchCommits) {
-          lines.push(`    - "${c.title}" (${timeAgo(c.createdAt)})`);
+          lines.push(`    - "${c.title}" ${c.url} (${timeAgo(c.createdAt)})`);
         }
       }
     }
@@ -90,17 +103,26 @@ function formatActivitiesForAI(items: ActivityItem[]): string {
   return lines.join("\n");
 }
 
+const HOUR_OPTIONS = [24, 36, 48, 60, 72] as const;
+
 export default function RecapPage() {
+  const [hours, setHours] = useState(24);
+  const [includedTypes, setIncludedTypes] = useState(
+    () => new Set(["commit", "pr", "review"]),
+  );
   const poll = usePollInterval();
-  const recap = api.github.getRecap.useQuery(undefined, {
-    refetchInterval: poll,
-  });
+  const recap = api.github.getRecap.useQuery(
+    { hours },
+    { refetchInterval: poll },
+  );
 
   const allItems = [
     ...(recap.data?.commits ?? []),
     ...(recap.data?.prs ?? []),
     ...(recap.data?.reviews ?? []),
-  ].toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  ]
+    .filter((item) => includedTypes.has(item.type))
+    .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -128,6 +150,8 @@ export default function RecapPage() {
     }
   }
 
+  const settings = api.settings.get.useQuery();
+
   async function handleGenerate() {
     if (!allItems.length) return;
     setIsGenerating(true);
@@ -136,7 +160,10 @@ export default function RecapPage() {
     const res = await fetch("/api/recap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ activities: formatActivitiesForAI(allItems) }),
+      body: JSON.stringify({
+        activities: formatActivitiesForAI(allItems),
+        customRule: settings.data?.recapCustomRule ?? undefined,
+      }),
     });
 
     if (!res.ok || !res.body) {
@@ -161,9 +188,24 @@ export default function RecapPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <Topbar title="24h Recap" />
+      <Topbar title="Recap" />
       <div className="p-6">
         <div className="mb-4 flex items-center gap-2">
+          <select
+            value={hours}
+            onChange={(e) => setHours(Number(e.target.value))}
+            className="h-6 rounded-md border border-border bg-background px-2 text-xs"
+          >
+            {HOUR_OPTIONS.map((h) => (
+              <option key={h} value={h}>
+                {h}h
+              </option>
+            ))}
+          </select>
+          <ActivityTypeFilter
+            included={includedTypes}
+            onChange={setIncludedTypes}
+          />
           <RepoFilter
             allRepos={recap.data?.allRepos ?? []}
             includedRepos={recap.data?.includedRepos ?? []}
@@ -196,17 +238,17 @@ export default function RecapPage() {
               <MetricCard
                 label="Commits"
                 value={recap.data?.commitCount ?? 0}
-                sub="last 24 hours"
+                sub={`last ${hours} hours`}
               />
               <MetricCard
                 label="Pull requests"
                 value={recap.data?.prCount ?? 0}
-                sub="last 24 hours"
+                sub={`last ${hours} hours`}
               />
               <MetricCard
                 label="Reviews"
                 value={recap.data?.reviewCount ?? 0}
-                sub="last 24 hours"
+                sub={`last ${hours} hours`}
               />
             </>
           )}
@@ -217,9 +259,45 @@ export default function RecapPage() {
         ) : allItems.length ? (
           <>
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Activity
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Activity
+                </h3>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground">
+                      <HugeiconsIcon icon={Share01Icon} size={12} />
+                      Export
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem
+                      onClick={() => {
+                        const json = JSON.stringify(allItems, null, 2);
+                        void navigator.clipboard.writeText(json);
+                      }}
+                    >
+                      <HugeiconsIcon icon={Copy01Icon} size={14} />
+                      Copy to clipboard
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        const json = JSON.stringify(allItems, null, 2);
+                        const blob = new Blob([json], { type: "application/json" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `recap-${hours}h-${new Date().toISOString().slice(0, 10)}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      <HugeiconsIcon icon={Download04Icon} size={14} />
+                      Download JSON
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
               <span className="text-xs text-muted-foreground">
                 {allItems.length} items
               </span>

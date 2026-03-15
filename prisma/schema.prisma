@@ -66,6 +66,7 @@ model ActivityCache {
     sha       String?
     branch    String?
     createdAt DateTime
+    updatedAt DateTime?
     fetchedAt DateTime @default(now())
 
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -82,6 +83,7 @@ model UserSettings {
     notifyReviews Boolean @default(true)
     notifyStatus       Boolean  @default(false)
     recapIncludedRepos String[] @default([])
+    recapCustomRule    String   @default("")
 
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

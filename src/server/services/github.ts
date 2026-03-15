@@ -56,6 +56,7 @@ export function mapSearchItemToPR(item: GitHubSearchItem): PullRequest {
     url: item.html_url,
     state,
     createdAt: new Date(item.created_at),
+    updatedAt: new Date(item.updated_at),
   };
 }
 

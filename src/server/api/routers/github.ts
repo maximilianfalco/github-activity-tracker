@@ -123,7 +123,9 @@ export const githubRouter = createTRPCRouter({
       .toSorted((a, b) => b.total - a.total);
   }),
 
-  getRecap: protectedProcedure.query(async ({ ctx }) => {
+  getRecap: protectedProcedure
+    .input(z.object({ hours: z.number().int().min(12).max(72).default(24) }).default({}))
+    .query(async ({ ctx, input }) => {
     const { data, stale } = await getCachedActivity(ctx.db, ctx.session.user.id);
 
     let items = data;
@@ -143,12 +145,15 @@ export const githubRouter = createTRPCRouter({
     });
     const savedRepos = settings?.recapIncludedRepos ?? [];
 
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - input.hours * 60 * 60 * 1000);
     const allRepoNames = [...new Set(items.map((d) => d.repoName))].toSorted();
+
+    const effectiveDate = (d: (typeof items)[number]) =>
+      d.updatedAt ?? d.createdAt;
 
     const activeRepoNames = [
       ...new Set(
-        items.filter((d) => d.createdAt >= cutoff).map((d) => d.repoName),
+        items.filter((d) => effectiveDate(d) >= cutoff).map((d) => d.repoName),
       ),
     ];
 
@@ -157,8 +162,8 @@ export const githubRouter = createTRPCRouter({
     const included = new Set<string>(effectiveIncluded);
 
     const filtered = items
-      .filter((d) => d.createdAt >= cutoff && included.has(d.repoName))
-      .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      .filter((d) => effectiveDate(d) >= cutoff && included.has(d.repoName))
+      .toSorted((a, b) => effectiveDate(b).getTime() - effectiveDate(a).getTime());
 
     const commits = filtered.filter((d) => d.type === "commit");
     const prs = filtered.filter((d) => d.type === "pr");

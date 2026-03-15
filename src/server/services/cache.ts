@@ -76,6 +76,7 @@ export async function refreshCache(
       sha: null as string | null,
       branch: null as string | null,
       createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
     })),
     ...reviews.map((r) => ({
       userId,
@@ -87,6 +88,7 @@ export async function refreshCache(
       sha: null as string | null,
       branch: null as string | null,
       createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
     })),
   ];
 

@@ -29,7 +29,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 
 const navItems = [
   { title: "Overview", href: "/dashboard", icon: DashboardSquare01Icon },
-  { title: "24h Recap", href: "/dashboard/recap", icon: Clock01Icon },
+  { title: "Recap", href: "/dashboard/recap", icon: Clock01Icon },
   { title: "Commits", href: "/dashboard/commits", icon: GitCommitIcon },
   {
     title: "Pull requests",
