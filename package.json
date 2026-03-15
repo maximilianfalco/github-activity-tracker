@@ -20,7 +20,10 @@
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "docker:dev": "docker compose up",
+    "docker:prod": "docker compose --profile prod up",
+    "docker:build": "docker compose --profile prod build"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.41",

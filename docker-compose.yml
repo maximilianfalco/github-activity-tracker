@@ -44,13 +44,11 @@ services:
       - prod
     ports:
       - "4731:4731"
+    env_file: .env
     environment:
       PORT: "4731"
       HOSTNAME: "0.0.0.0"
       DATABASE_URL: postgresql://github_dash:local_dev_password@db:5432/github_dash
-      AUTH_SECRET: ${AUTH_SECRET}
-      AUTH_GITHUB_ID: ${AUTH_GITHUB_ID}
-      AUTH_GITHUB_SECRET: ${AUTH_GITHUB_SECRET}
       AUTH_TRUST_HOST: "true"
     depends_on:
       db:

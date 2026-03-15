@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, Controller } from "react-hook-form";
 import { api } from "~/trpc/react";
@@ -73,9 +73,6 @@ function SettingsGroup({
 }
 
 export default function SettingsPage() {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
   const router = useRouter();
   const utils = api.useUtils();
   const settings = api.settings.get.useQuery();
@@ -120,7 +117,7 @@ export default function SettingsPage() {
     <>
       <Topbar title="Settings" />
       <div className="max-w-lg p-6">
-        {!mounted || settings.isLoading ? (
+        {settings.isLoading ? (
           <div className="space-y-4">
             {Array.from({ length: 6 }).map((_, i) => (
               <Skeleton key={i} className="h-8 w-full" />
