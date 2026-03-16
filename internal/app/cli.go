@@ -65,6 +65,11 @@ func NewModel(ctx context.Context, runtimeConfig *config.RuntimeConfig) (*CLI, f
 }
 
 func (c *CLI) Execute() error {
+	var recapContextHours int
+	var recapContextTypes string
+	var recapContextRepos []string
+	var recapContextJSON bool
+
 	root := &cobra.Command{
 		Use:          "ghat",
 		Short:        "GitHub Activity Tracker CLI",
@@ -82,6 +87,31 @@ func (c *CLI) Execute() error {
 		},
 	}
 
+	recapContextCommand := &cobra.Command{
+		Use:   "recap-context",
+		Short: "Print recap context for external tools and agents",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if recapContextHours < 1 {
+				return fmt.Errorf("--hours must be at least 1")
+			}
+			includedTypes, includedTypeList, err := parseRecapTypes(recapContextTypes)
+			if err != nil {
+				return err
+			}
+			return c.runWithState(func() error {
+				includedRepos := parseRecapRepos(recapContextRepos)
+				if len(includedRepos) == 0 {
+					includedRepos = append([]string(nil), c.settings.RecapIncludedRepos...)
+				}
+				return c.printRecapContext(recapContextHours, includedTypes, includedTypeList, includedRepos, recapContextJSON)
+			})
+		},
+	}
+	recapContextCommand.Flags().IntVar(&recapContextHours, "hours", 24, "Recap window in hours")
+	recapContextCommand.Flags().StringVar(&recapContextTypes, "types", "commit,pr,review", "Comma-separated activity types: commit,pr,review,all")
+	recapContextCommand.Flags().StringSliceVar(&recapContextRepos, "repos", nil, "Comma-separated repo names to include; repeatable")
+	recapContextCommand.Flags().BoolVar(&recapContextJSON, "json", false, "Emit recap context as JSON")
+
 	root.AddCommand(
 		loginCommand,
 		&cobra.Command{Use: "overview", Short: "Show overview", RunE: func(cmd *cobra.Command, args []string) error { return c.runWithState(c.printOverview) }},
@@ -96,6 +126,7 @@ func (c *CLI) Execute() error {
 		}},
 		&cobra.Command{Use: "repos", Short: "Show repo breakdown", RunE: func(cmd *cobra.Command, args []string) error { return c.runWithState(c.printRepos) }},
 		&cobra.Command{Use: "recap", Short: "Generate recap", RunE: func(cmd *cobra.Command, args []string) error { return c.runWithState(c.printRecap) }},
+		recapContextCommand,
 		&cobra.Command{Use: "refresh", Short: "Refresh activity", RunE: func(cmd *cobra.Command, args []string) error {
 			return c.runWithState(func() error { return c.refresh(true) })
 		}},

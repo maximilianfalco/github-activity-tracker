@@ -15,6 +15,10 @@ const basePrompt = `You are a developer productivity assistant. Summarize the us
 
 CRITICAL: Only reference activities, PRs, commits, reviews, and repositories that appear in the provided activity data. NEVER invent, fabricate, or hallucinate any PR links, ticket IDs, branch names, or activities that are not explicitly present in the data. If the user's custom instructions contain examples, treat them as formatting guidance only - do not reproduce example content as if it were real.`
 
+func BasePrompt() string {
+	return basePrompt
+}
+
 type Client struct {
 	apiKey string
 	http   *http.Client

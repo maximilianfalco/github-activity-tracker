@@ -101,8 +101,18 @@ go run ./cmd/ghat overview
 go run ./cmd/ghat commits
 go run ./cmd/ghat prs
 go run ./cmd/ghat recap
+go run ./cmd/ghat recap-context --hours 24 --json
 go run ./cmd/ghat refresh
 ```
+
+For external tools and coding agents, `ghat` also exposes recap context without calling OpenAI:
+
+```bash
+ghat recap-context --hours 24 --json
+ghat recap-context --hours 48 --types commit,pr --repos owner/repo --json
+```
+
+That command returns the saved custom recap rule, the base recap instructions, the filtered activity items, and the preformatted activity text so another agent can generate the final recap itself.
 
 <details>
 <summary><strong>Environment variables</strong></summary>
