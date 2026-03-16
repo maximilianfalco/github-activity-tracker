@@ -24,7 +24,9 @@ type LocalConfig struct {
 }
 
 func LoadRuntimeConfig() (*RuntimeConfig, error) {
-	_ = godotenv.Overload()
+	if err := loadEnvWithPrecedence(); err != nil {
+		return nil, err
+	}
 
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
@@ -42,6 +44,62 @@ func LoadRuntimeConfig() (*RuntimeConfig, error) {
 		AuthGitHubID: strings.TrimSpace(os.Getenv("AUTH_GITHUB_ID")),
 		LocalConfig:  localConfig,
 	}, nil
+}
+
+func loadEnvWithPrecedence() error {
+	merged := map[string]string{}
+
+	if path, err := globalEnvPath(); err != nil {
+		return err
+	} else if values, err := readEnvFile(path); err != nil {
+		return err
+	} else {
+		for key, value := range values {
+			merged[key] = value
+		}
+	}
+
+	if values, err := readEnvFile(".env"); err != nil {
+		return err
+	} else {
+		for key, value := range values {
+			merged[key] = value
+		}
+	}
+
+	for key, value := range merged {
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("set %s from env file: %w", key, err)
+		}
+	}
+
+	return nil
+}
+
+func readEnvFile(path string) (map[string]string, error) {
+	values, err := godotenv.Read(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read env file %s: %w", path, err)
+	}
+	return values, nil
+}
+
+func globalEnvPath() (string, error) {
+	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+		return filepath.Join(xdg, "ghat", ".env"), nil
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(homeDir, ".config", "ghat", ".env"), nil
 }
 
 func localConfigPath() (string, error) {
