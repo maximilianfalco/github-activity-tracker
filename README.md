@@ -39,21 +39,64 @@ Everything auto-refreshes and results are cached so you don't burn through GitHu
 
 ## Quick Start
 
-You'll need Node.js 22+, pnpm, PostgreSQL, and Go 1.24+ if you want to use the local CLI.
+You'll need Node.js 22+, pnpm, Docker or another PostgreSQL instance, and Go 1.24+ if you want to use the local CLI.
+
+The fastest setup path is one command:
+
+```bash
+./scripts/setup.sh
+```
+
+It will:
+- create `.env` if needed
+- prompt for your GitHub OAuth app credentials
+- install dependencies
+- start a local Postgres container if Docker or Podman is available
+- apply the Prisma schema
+- install `ghat` to `~/.local/bin` by default
+- sync repo `.env` with `~/.config/ghat/.env` so the global CLI can run outside the repo
+
+You can also run the same flow with:
+
+```bash
+make setup
+```
+
+or:
+
+```bash
+pnpm run bootstrap
+```
 
 ```bash
 git clone https://github.com/maximilianfalco/github-activity-tracker.git
 cd github-activity-tracker
-pnpm install
-
-cp .env.example .env
-# fill in your DATABASE_URL, AUTH_SECRET, AUTH_GITHUB_ID, AUTH_GITHUB_SECRET
-
-pnpm db:push
-pnpm dev
+make setup
 ```
 
 Then open [localhost:4731](http://localhost:4731) and sign in with GitHub.
+
+When `ghat` loads configuration, it uses this precedence:
+
+1. existing process environment variables
+2. repo-local `.env` in the current working directory
+3. global fallback `~/.config/ghat/.env`
+
+That keeps the CLI aligned with the web app when you're inside the repo, while still letting the globally installed binary work from anywhere else.
+
+If you need to resync those files later, run:
+
+```bash
+make sync-config
+```
+
+or:
+
+```bash
+pnpm run sync-config
+```
+
+That merge is two-way, but repo-local `.env` wins on conflicts.
 
 ## CLI Companion
 

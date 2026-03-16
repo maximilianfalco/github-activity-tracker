@@ -19,6 +19,8 @@
     "lint": "next lint",
     "lint:fix": "next lint --fix",
     "preview": "next build && next start",
+    "bootstrap": "./scripts/setup.sh",
+    "sync-config": "./scripts/sync-ghat-config.sh",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
