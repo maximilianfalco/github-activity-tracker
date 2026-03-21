@@ -1,4 +1,8 @@
 export type ActivityType = "commit" | "pr" | "review";
+export type PullRequestReviewStatus =
+  | "approved"
+  | "changes_requested"
+  | "review_pending";
 
 export interface Commit {
   sha: string;
@@ -10,10 +14,12 @@ export interface Commit {
 }
 
 export interface PullRequest {
+  number?: number;
   title: string;
   repoName: string;
   url: string;
   state: "open" | "merged" | "closed";
+  reviewStatus?: PullRequestReviewStatus;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -69,6 +75,28 @@ export interface GitHubSearchItem {
   pull_request?: {
     merged_at: string | null;
   };
+}
+
+export interface GitHubPullRequestCommit {
+  sha: string;
+  html_url: string;
+  commit: {
+    message: string;
+    author: {
+      date: string;
+    } | null;
+    committer: {
+      date: string;
+    } | null;
+  };
+}
+
+export interface GitHubPullRequestReview {
+  state: string;
+  submitted_at: string | null;
+  user: {
+    login: string;
+  } | null;
 }
 
 export interface GitHubSearchCommitItem {

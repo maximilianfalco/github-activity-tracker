@@ -1,6 +1,7 @@
 import type {
   Commit,
   PullRequest,
+  PullRequestReviewStatus,
   Review,
   GitHubEvent,
   GitHubRepoCommit,
@@ -9,6 +10,8 @@ import type {
   GitHubSearchCommitResponse,
   GitHubSearchCommitItem,
   GitHubUser,
+  GitHubPullRequestCommit,
+  GitHubPullRequestReview,
 } from "./github.types";
 import { GitHubRateLimitError } from "./github.types";
 
@@ -51,6 +54,7 @@ export function mapSearchItemToPR(item: GitHubSearchItem): PullRequest {
     state = "closed";
   }
   return {
+    number: extractPullRequestNumber(item.html_url),
     title: item.title,
     repoName,
     url: item.html_url,
@@ -62,6 +66,12 @@ export function mapSearchItemToPR(item: GitHubSearchItem): PullRequest {
 
 export function mapSearchItemToReview(item: GitHubSearchItem): Review {
   return mapSearchItemToPR(item);
+}
+
+export function extractPullRequestNumber(url: string): number | undefined {
+  const match = /\/pull\/(\d+)(?:\/|$)/.exec(url);
+  const value = match?.[1];
+  return value ? Number(value) : undefined;
 }
 
 export function mapSearchCommitToCommit(
@@ -142,8 +152,7 @@ async function fetchCommitsFromEvents(
   login: string,
 ): Promise<Commit[]> {
   const branches = new Map<string, string>();
-  let url: string | null =
-    `${GITHUB_API}/users/${login}/events?per_page=100`;
+  let url: string | null = `${GITHUB_API}/users/${login}/events?per_page=100`;
   let page = 0;
 
   while (url && page < 3) {
@@ -247,6 +256,136 @@ export async function fetchReviews(
     `is:pr reviewed-by:${login} -author:${login} sort:updated`,
   );
   return items.map(mapSearchItemToReview);
+}
+
+export async function fetchCurrentPullRequests(
+  token: string,
+  login: string,
+  repoNames: string[],
+): Promise<PullRequest[]> {
+  if (repoNames.length === 0) return [];
+
+  const groups = await Promise.all(
+    repoNames.map((repoName) =>
+      fetchSearchResults(
+        token,
+        `is:pr is:open author:${login} repo:${repoName} sort:updated`,
+      ),
+    ),
+  );
+
+  return groups
+    .flat()
+    .map(mapSearchItemToPR)
+    .filter(
+      (pr): pr is PullRequest & { number: number } => pr.number !== undefined,
+    )
+    .toSorted((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+}
+
+export async function fetchPullRequestCommits(
+  token: string,
+  repoName: string,
+  prNumber: number,
+): Promise<Commit[]> {
+  const commits: Commit[] = [];
+  let url: string | null =
+    `${GITHUB_API}/repos/${repoName}/pulls/${prNumber}/commits?per_page=100`;
+  let page = 0;
+
+  while (url && page < 5) {
+    const response = await githubFetch(token, url);
+    const data = (await response.json()) as GitHubPullRequestCommit[];
+
+    for (const item of data) {
+      const authoredAt =
+        item.commit.author?.date ?? item.commit.committer?.date ?? null;
+      if (!authoredAt) continue;
+
+      commits.push({
+        sha: item.sha,
+        message: item.commit.message.split("\n")[0]!,
+        repoName,
+        branch: null,
+        url: item.html_url,
+        createdAt: new Date(authoredAt),
+      });
+    }
+
+    url = parseNextUrl(response.headers.get("link"));
+    page++;
+  }
+
+  return commits.toSorted(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+  );
+}
+
+export async function fetchPullRequestReviewStatus(
+  token: string,
+  repoName: string,
+  prNumber: number,
+): Promise<PullRequestReviewStatus> {
+  const reviews: GitHubPullRequestReview[] = [];
+  let url: string | null =
+    `${GITHUB_API}/repos/${repoName}/pulls/${prNumber}/reviews?per_page=100`;
+  let page = 0;
+
+  while (url && page < 5) {
+    const response = await githubFetch(token, url);
+    const data = (await response.json()) as GitHubPullRequestReview[];
+    reviews.push(...data);
+    url = parseNextUrl(response.headers.get("link"));
+    page++;
+  }
+
+  return derivePullRequestReviewStatus(reviews);
+}
+
+export function derivePullRequestReviewStatus(
+  reviews: GitHubPullRequestReview[],
+): PullRequestReviewStatus {
+  const latestByReviewer = new Map<
+    string,
+    { state: string; submittedAt: number }
+  >();
+
+  for (const review of reviews) {
+    const reviewer = review.user?.login;
+    if (!reviewer || !review.submitted_at) continue;
+
+    const normalizedState = review.state.toUpperCase();
+    if (
+      normalizedState !== "APPROVED" &&
+      normalizedState !== "CHANGES_REQUESTED" &&
+      normalizedState !== "DISMISSED"
+    ) {
+      continue;
+    }
+
+    const submittedAt = new Date(review.submitted_at).getTime();
+    const existing = latestByReviewer.get(reviewer);
+    if (!existing || submittedAt > existing.submittedAt) {
+      latestByReviewer.set(reviewer, {
+        state: normalizedState,
+        submittedAt,
+      });
+    }
+  }
+
+  const effectiveStates = [...latestByReviewer.values()].map(
+    (review) => review.state,
+  );
+
+  if (effectiveStates.includes("CHANGES_REQUESTED")) {
+    return "changes_requested";
+  }
+
+  if (effectiveStates.includes("APPROVED")) {
+    return "approved";
+  }
+
+  return "review_pending";
 }
 
 async function fetchSearchResults(
