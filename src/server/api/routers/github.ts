@@ -2,8 +2,15 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { getCachedActivity, refreshCache } from "~/server/services/cache";
-import { fetchLogin } from "~/server/services/github";
-import { GitHubRateLimitError } from "~/server/services/github.types";
+import {
+  extractPullRequestNumber,
+  fetchLogin,
+  fetchPullRequestReviewStatus,
+} from "~/server/services/github";
+import {
+  GitHubRateLimitError,
+  type PullRequestReviewStatus,
+} from "~/server/services/github.types";
 
 const dateRangeSchema = z.enum(["1d", "7d", "30d", "90d"]).default("30d");
 
@@ -24,7 +31,7 @@ async function getTokenAndLogin(ctx: {
     });
   }
 
-  const login = ctx.session.githubLogin ?? await fetchLogin(token);
+  const login = ctx.session.githubLogin ?? (await fetchLogin(token));
 
   return { token, login };
 }
@@ -39,9 +46,123 @@ function handleGitHubError(error: unknown): never {
   throw error;
 }
 
+type CachedActivityItem = Awaited<
+  ReturnType<typeof getCachedActivity>
+>["data"][number];
+
+type RecapCommitItem = {
+  id: string;
+  type: "commit";
+  title: string;
+  url: string;
+  repoName: string;
+  branch: string | null;
+  state: null;
+  sha: string | null;
+  createdAt: Date;
+};
+
+type RecapPRItem = {
+  id: string;
+  type: "pr";
+  number: number;
+  title: string;
+  url: string;
+  repoName: string;
+  branch: null;
+  state: "open" | "merged" | "closed";
+  reviewStatus: PullRequestReviewStatus | null;
+  createdAt: Date;
+  updatedAt: Date;
+  commits: RecapCommitItem[];
+};
+
+type RecapRepoTreeItem = {
+  name: string;
+  prCount: number;
+  commitCount: number;
+  prs: RecapPRItem[];
+};
+
+type RecapReviewItem = {
+  id: string;
+  type: "review";
+  title: string;
+  url: string;
+  repoName: string;
+  branch: string | null;
+  state: "open" | "merged" | "closed" | null;
+  createdAt: Date;
+  updatedAt: Date | null;
+};
+
+function buildReviewItem(item: CachedActivityItem): RecapReviewItem {
+  return {
+    id: item.id,
+    type: "review",
+    title: item.title,
+    url: item.url,
+    repoName: item.repoName,
+    branch: item.branch,
+    state: item.state as "open" | "merged" | "closed" | null,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  };
+}
+
+function buildFallbackTree(
+  items: CachedActivityItem[],
+  repoNames: string[],
+  cutoff: Date,
+): RecapRepoTreeItem[] {
+  const openPrs = items
+    .filter((item) => item.type === "pr" && item.state === "open")
+    .filter((item) => (item.updatedAt ?? item.createdAt) >= cutoff)
+    .filter((item) => repoNames.includes(item.repoName));
+
+  const repoMap = new Map<string, RecapPRItem[]>();
+  for (const item of openPrs) {
+    const prNumber = extractPullRequestNumber(item.url);
+    if (!prNumber) continue;
+
+    const repoItems = repoMap.get(item.repoName) ?? [];
+    repoItems.push({
+      id: item.id,
+      type: "pr",
+      number: prNumber,
+      title: item.title,
+      url: item.url,
+      repoName: item.repoName,
+      branch: null,
+      state: "open",
+      reviewStatus: null,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt ?? item.createdAt,
+      commits: [],
+    });
+    repoMap.set(item.repoName, repoItems);
+  }
+
+  return repoNames.map((repoName) => {
+    const prs = (repoMap.get(repoName) ?? []).toSorted(
+      (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
+    );
+
+    return {
+      name: repoName,
+      prCount: prs.length,
+      commitCount: 0,
+      prs,
+    };
+  });
+}
+
 export const githubRouter = createTRPCRouter({
   getOverview: protectedProcedure.query(async ({ ctx }) => {
-    const { data, stale } = await getCachedActivity(ctx.db, ctx.session.user.id);
+    const { data, stale } = await getCachedActivity(
+      ctx.db,
+      ctx.session.user.id,
+    );
 
     if (stale) {
       try {
@@ -61,7 +182,11 @@ export const githubRouter = createTRPCRouter({
   getCommits: protectedProcedure
     .input(z.object({ dateRange: dateRangeSchema }).default({}))
     .query(async ({ ctx, input }) => {
-      const { data } = await getCachedActivity(ctx.db, ctx.session.user.id, "commit");
+      const { data } = await getCachedActivity(
+        ctx.db,
+        ctx.session.user.id,
+        "commit",
+      );
       const cutoff = daysAgo(input.dateRange);
       return data.filter((d) => d.createdAt >= cutoff);
     }),
@@ -76,17 +201,50 @@ export const githubRouter = createTRPCRouter({
         .default({}),
     )
     .query(async ({ ctx, input }) => {
-      const { data } = await getCachedActivity(ctx.db, ctx.session.user.id, "pr");
+      const { data } = await getCachedActivity(
+        ctx.db,
+        ctx.session.user.id,
+        "pr",
+      );
       const cutoff = daysAgo(input.dateRange);
-      return data
+      const filtered = data
         .filter((d) => d.createdAt >= cutoff)
         .filter((d) => !input.state || d.state === input.state);
+
+      try {
+        const { token } = await getTokenAndLogin(ctx);
+        return await Promise.all(
+          filtered.map(async (pr) => {
+            const prNumber = extractPullRequestNumber(pr.url);
+            if (!prNumber) {
+              return { ...pr, reviewStatus: "review_pending" as const };
+            }
+
+            const reviewStatus = await fetchPullRequestReviewStatus(
+              token,
+              pr.repoName,
+              prNumber,
+            );
+
+            return { ...pr, reviewStatus };
+          }),
+        );
+      } catch {
+        return filtered.map((pr) => ({
+          ...pr,
+          reviewStatus: "review_pending" as const,
+        }));
+      }
     }),
 
   getReviews: protectedProcedure
     .input(z.object({ dateRange: dateRangeSchema }).default({}))
     .query(async ({ ctx, input }) => {
-      const { data } = await getCachedActivity(ctx.db, ctx.session.user.id, "review");
+      const { data } = await getCachedActivity(
+        ctx.db,
+        ctx.session.user.id,
+        "review",
+      );
       const cutoff = daysAgo(input.dateRange);
       return data.filter((d) => d.createdAt >= cutoff);
     }),
@@ -124,70 +282,62 @@ export const githubRouter = createTRPCRouter({
   }),
 
   getRecap: protectedProcedure
-    .input(z.object({ hours: z.number().int().min(12).max(72).default(24) }).default({}))
+    .input(
+      z
+        .object({ hours: z.number().int().min(12).max(72).default(24) })
+        .default({}),
+    )
     .query(async ({ ctx, input }) => {
-    const { data, stale } = await getCachedActivity(ctx.db, ctx.session.user.id);
+      const { data } = await getCachedActivity(ctx.db, ctx.session.user.id);
 
-    let items = data;
-    if (stale) {
-      try {
-        const { token, login } = await getTokenAndLogin(ctx);
-        await refreshCache(ctx.db, ctx.session.user.id, token, login);
-        const fresh = await getCachedActivity(ctx.db, ctx.session.user.id);
-        items = fresh.data;
-      } catch {
-        // fall through with stale data
-      }
-    }
+      const settings = await ctx.db.userSettings.findUnique({
+        where: { userId: ctx.session.user.id },
+      });
+      const savedRepos = settings?.recapIncludedRepos ?? [];
 
-    const settings = await ctx.db.userSettings.findUnique({
-      where: { userId: ctx.session.user.id },
-    });
-    const savedRepos = settings?.recapIncludedRepos ?? [];
+      const cutoff = new Date(Date.now() - input.hours * 60 * 60 * 1000);
+      const allRepoNames = [...new Set(data.map((d) => d.repoName))].toSorted();
 
-    const cutoff = new Date(Date.now() - input.hours * 60 * 60 * 1000);
-    const allRepoNames = [...new Set(items.map((d) => d.repoName))].toSorted();
+      const effectiveDate = (d: CachedActivityItem) =>
+        d.updatedAt ?? d.createdAt;
+      const activeRepoNames = [
+        ...new Set(
+          data.filter((d) => effectiveDate(d) >= cutoff).map((d) => d.repoName),
+        ),
+      ].toSorted();
 
-    const effectiveDate = (d: (typeof items)[number]) =>
-      d.updatedAt ?? d.createdAt;
+      const effectiveIncluded =
+        savedRepos.length > 0 ? savedRepos : activeRepoNames;
+      const included = new Set<string>(effectiveIncluded);
+      const includedActiveRepoNames = activeRepoNames.filter((repoName) =>
+        included.has(repoName),
+      );
 
-    const activeRepoNames = [
-      ...new Set(
-        items.filter((d) => effectiveDate(d) >= cutoff).map((d) => d.repoName),
-      ),
-    ];
+      const reviews = data
+        .filter((item) => item.type === "review")
+        .filter(
+          (item) =>
+            effectiveDate(item) >= cutoff && included.has(item.repoName),
+        )
+        .map(buildReviewItem)
+        .toSorted(
+          (a, b) =>
+            (b.updatedAt ?? b.createdAt).getTime() -
+            (a.updatedAt ?? a.createdAt).getTime(),
+        );
 
-    const effectiveIncluded =
-      savedRepos.length > 0 ? savedRepos : activeRepoNames;
-    const included = new Set<string>(effectiveIncluded);
+      const repoTree = buildFallbackTree(data, includedActiveRepoNames, cutoff);
 
-    const filtered = items
-      .filter((d) => effectiveDate(d) >= cutoff && included.has(d.repoName))
-      .toSorted((a, b) => effectiveDate(b).getTime() - effectiveDate(a).getTime());
-
-    const commits = filtered.filter((d) => d.type === "commit");
-    const prs = filtered.filter((d) => d.type === "pr");
-    const reviews = filtered.filter((d) => d.type === "review");
-
-    const repoMap = new Map<string, number>();
-    for (const item of filtered) {
-      repoMap.set(item.repoName, (repoMap.get(item.repoName) ?? 0) + 1);
-    }
-
-    return {
-      commitCount: commits.length,
-      prCount: prs.length,
-      reviewCount: reviews.length,
-      commits,
-      prs,
-      reviews,
-      activeRepos: [...repoMap.entries()]
-        .map(([name, count]) => ({ name, count }))
-        .toSorted((a, b) => b.count - a.count),
-      allRepos: allRepoNames,
-      includedRepos: effectiveIncluded,
-    };
-  }),
+      return {
+        commitCount: 0,
+        prCount: repoTree.reduce((sum, repo) => sum + repo.prCount, 0),
+        reviewCount: reviews.length,
+        repoTree,
+        reviews,
+        allRepos: allRepoNames,
+        includedRepos: effectiveIncluded,
+      };
+    }),
 
   refresh: protectedProcedure.mutation(async ({ ctx }) => {
     try {
@@ -222,7 +372,8 @@ function buildOverview(
   return {
     commits30d: recent.filter((d) => d.type === "commit").length,
     openPrs: data.filter((d) => d.type === "pr" && d.state === "open").length,
-    mergedPrs: recent.filter((d) => d.type === "pr" && d.state === "merged").length,
+    mergedPrs: recent.filter((d) => d.type === "pr" && d.state === "merged")
+      .length,
     reviewsGiven: recent.filter((d) => d.type === "review").length,
     recentActivity,
     isStale,
