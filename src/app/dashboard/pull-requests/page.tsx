@@ -106,6 +106,16 @@ export default function PullRequestsPage() {
                         variant={pr.state as "open" | "merged" | "closed"}
                       />
                     )}
+                    {pr.reviewStatus && (
+                      <ActivityBadge
+                        variant={
+                          pr.reviewStatus as
+                            | "approved"
+                            | "changes_requested"
+                            | "review_pending"
+                        }
+                      />
+                    )}
                     <span className="text-muted-foreground shrink-0 text-[11px]">
                       {pr.repoName} · {timeAgo(pr.createdAt)}
                     </span>

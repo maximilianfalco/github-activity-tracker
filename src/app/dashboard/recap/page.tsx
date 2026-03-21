@@ -1,8 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { api } from "~/trpc/react";
+import { useEffect, useState } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import {
+  SparklesIcon,
+  Copy01Icon,
+  Download04Icon,
+  Share01Icon,
+  GitPullRequestIcon,
+  GitCommitIcon,
+  EyeIcon,
+} from "@hugeicons/core-free-icons";
+import { api, type RouterOutputs } from "~/trpc/react";
 import { usePollInterval } from "~/hooks/use-poll-interval";
 import { Topbar } from "~/components/dashboard/topbar";
 import {
@@ -13,91 +22,123 @@ import { ActivityBadge } from "~/components/dashboard/activity-badge";
 import {
   ActivityFeedSkeleton,
   timeAgo,
-  ROW_HEIGHT,
 } from "~/components/dashboard/activity-feed";
 import { RepoFilter } from "~/components/dashboard/repo-filter";
 import { ActivityTypeFilter } from "~/components/dashboard/activity-type-filter";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  SparklesIcon,
-  Copy01Icon,
-  Download04Icon,
-  Share01Icon,
-} from "@hugeicons/core-free-icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
+import { Card, CardContent } from "~/components/ui/card";
 
-const dotColors: Record<string, string> = {
-  commit: "bg-green-500",
-  pr: "bg-blue-500",
-  review: "bg-amber-500",
+type RecapData = RouterOutputs["github"]["getRecap"];
+type RepoTreeItem = RecapData["repoTree"][number];
+type PRTreeItem = RepoTreeItem["prs"][number];
+type ReviewItem = RecapData["reviews"][number];
+type CommitItem = PRTreeItem["commits"][number];
+
+type PRDetailState = {
+  status: "loading" | "ready" | "error";
+  reviewStatus: PRTreeItem["reviewStatus"];
+  commits: CommitItem[];
+  message?: string;
 };
 
-interface ActivityItem {
-  type: string;
-  title: string;
-  url: string;
-  repoName: string;
-  branch: string | null;
-  state: string | null;
-  createdAt: Date;
+type RecapStreamChunk =
+  | {
+      type: "pr_detail";
+      prId: string;
+      reviewStatus: PRTreeItem["reviewStatus"];
+      commits: CommitItem[];
+    }
+  | {
+      type: "pr_error";
+      prId: string;
+      message: string;
+    }
+  | {
+      type: "done";
+    };
+
+function mergeRepoTree(
+  repoTree: RepoTreeItem[],
+  prDetails: Record<string, PRDetailState>,
+): RepoTreeItem[] {
+  return repoTree.map((repo) => {
+    const prs = repo.prs.map((pr) => {
+      const detail = prDetails[pr.id];
+      return {
+        ...pr,
+        reviewStatus: detail?.reviewStatus ?? pr.reviewStatus,
+        commits: detail?.status === "ready" ? detail.commits : pr.commits,
+      };
+    });
+
+    return {
+      ...repo,
+      commitCount: prs.reduce((sum, pr) => sum + pr.commits.length, 0),
+      prs,
+    };
+  });
 }
 
-function formatActivitiesForAI(items: ActivityItem[]): string {
-  const repoMap = new Map<string, ActivityItem[]>();
-  for (const item of items) {
-    const list = repoMap.get(item.repoName) ?? [];
-    list.push(item);
-    repoMap.set(item.repoName, list);
-  }
-
+function formatRepoTreeForAI(
+  repoTree: RepoTreeItem[],
+  options: {
+    includePRs: boolean;
+    includeCommits: boolean;
+  },
+): string {
   const lines: string[] = [];
 
-  for (const [repo, repoItems] of repoMap) {
-    lines.push(`## ${repo}`);
+  for (const repo of repoTree) {
+    lines.push(`## ${repo.name}`);
 
-    const prs = repoItems.filter((i) => i.type === "pr");
-    if (prs.length > 0) {
-      lines.push("PRs:");
-      for (const p of prs) {
-        lines.push(`  - "${p.title}" [${p.state ?? "unknown"}] ${p.url} (${timeAgo(p.createdAt)})`);
-      }
+    if (repo.prs.length === 0) {
+      lines.push("- No current PRs in this active repo.");
+      lines.push("");
+      continue;
     }
 
-    const reviews = repoItems.filter((i) => i.type === "review");
-    if (reviews.length > 0) {
-      lines.push("Reviews:");
-      for (const r of reviews) {
-        lines.push(`  - "${r.title}" [${r.state ?? "unknown"}] ${r.url} (${timeAgo(r.createdAt)})`);
-      }
-    }
+    for (const pr of repo.prs) {
+      const prLabel = options.includePRs ? "PR" : "PR context";
+      lines.push(
+        `- ${prLabel} #${pr.number}: "${pr.title}" [${pr.state}; review: ${pr.reviewStatus ?? "unknown"}] ${pr.url} (updated ${timeAgo(pr.updatedAt)})`,
+      );
 
-    const commits = repoItems.filter((i) => i.type === "commit");
-    if (commits.length > 0) {
-      const branchMap = new Map<string, ActivityItem[]>();
-      for (const c of commits) {
-        const branch = c.branch ?? "unknown";
-        const list = branchMap.get(branch) ?? [];
-        list.push(c);
-        branchMap.set(branch, list);
+      if (!options.includeCommits) continue;
+
+      if (pr.commits.length === 0) {
+        lines.push("  - No commits from the selected timeframe.");
+        continue;
       }
 
-      lines.push("Commits:");
-      for (const [branch, branchCommits] of branchMap) {
-        lines.push(`  Branch: ${branch}`);
-        for (const c of branchCommits) {
-          lines.push(`    - "${c.title}" ${c.url} (${timeAgo(c.createdAt)})`);
-        }
+      lines.push("  - Commits:");
+      for (const commit of pr.commits) {
+        lines.push(
+          `    - "${commit.title}" ${commit.url} (${timeAgo(commit.createdAt)})`,
+        );
       }
     }
 
     lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+function formatReviewsForAI(reviews: ReviewItem[]): string {
+  if (reviews.length === 0) return "";
+
+  const lines = ["## Reviews"];
+  for (const review of reviews) {
+    lines.push(
+      `- ${review.repoName}: "${review.title}" [${review.state ?? "unknown"}] ${review.url} (${timeAgo(review.updatedAt ?? review.createdAt)})`,
+    );
   }
 
   return lines.join("\n");
@@ -110,27 +151,174 @@ export default function RecapPage() {
   const [includedTypes, setIncludedTypes] = useState(
     () => new Set(["commit", "pr", "review"]),
   );
+  const [prDetails, setPrDetails] = useState<Record<string, PRDetailState>>({});
+  const [isHydratingDetails, setIsHydratingDetails] = useState(false);
+
   const poll = usePollInterval();
   const recap = api.github.getRecap.useQuery(
     { hours },
     { refetchInterval: poll },
   );
 
-  const allItems = [
-    ...(recap.data?.commits ?? []),
-    ...(recap.data?.prs ?? []),
-    ...(recap.data?.reviews ?? []),
-  ]
-    .filter((item) => includedTypes.has(item.type))
-    .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const showPRs = includedTypes.has("pr");
+  const showCommits = includedTypes.has("commit");
+  const showReviews = includedTypes.has("review");
+  const showTree = showPRs || showCommits;
 
-  const parentRef = useRef<HTMLDivElement>(null);
-  const virtualizer = useVirtualizer({
-    count: allItems.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 10,
-  });
+  const repoTreeShell = recap.data?.repoTree ?? [];
+  const repoTree = mergeRepoTree(repoTreeShell, prDetails);
+  const visibleReviews = showReviews ? (recap.data?.reviews ?? []) : [];
+  const streamPrs = repoTreeShell.flatMap((repo) =>
+    repo.prs.map((pr) => ({
+      id: pr.id,
+      repoName: pr.repoName,
+      number: pr.number,
+      updatedAt: pr.updatedAt,
+    })),
+  );
+  const streamKey = [
+    hours,
+    ...streamPrs.map((pr) => `${pr.id}:${pr.updatedAt.toISOString()}`),
+  ].join("|");
+
+  useEffect(() => {
+    if (streamPrs.length === 0) {
+      setPrDetails({});
+      setIsHydratingDetails(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    setPrDetails(
+      Object.fromEntries(
+        streamPrs.map((pr) => [
+          pr.id,
+          {
+            status: "loading" as const,
+            reviewStatus: null,
+            commits: [],
+          },
+        ]),
+      ),
+    );
+    setIsHydratingDetails(true);
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/recap-tree-stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            hours,
+            prs: streamPrs.map(({ id, repoName, number }) => ({
+              id,
+              repoName,
+              number,
+            })),
+          }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          throw new Error("Failed to start recap stream");
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const chunk = JSON.parse(line) as RecapStreamChunk;
+
+            if (chunk.type === "pr_detail") {
+              setPrDetails((prev) => ({
+                ...prev,
+                [chunk.prId]: {
+                  status: "ready",
+                  reviewStatus: chunk.reviewStatus,
+                  commits: chunk.commits.map((commit) => ({
+                    ...commit,
+                    createdAt: new Date(commit.createdAt),
+                  })),
+                },
+              }));
+              continue;
+            }
+
+            if (chunk.type === "pr_error") {
+              setPrDetails((prev) => ({
+                ...prev,
+                [chunk.prId]: {
+                  status: "error",
+                  reviewStatus: null,
+                  commits: [],
+                  message: chunk.message,
+                },
+              }));
+              continue;
+            }
+
+            if (chunk.type === "done") {
+              setIsHydratingDetails(false);
+            }
+          }
+        }
+
+        setIsHydratingDetails(false);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+
+        setPrDetails((prev) =>
+          Object.fromEntries(
+            Object.entries(prev).map(([prId, detail]) => [
+              prId,
+              detail.status === "ready"
+                ? detail
+                : {
+                    status: "error" as const,
+                    reviewStatus: null,
+                    commits: [],
+                    message:
+                      error instanceof Error
+                        ? error.message
+                        : "Failed to fetch PR details.",
+                  },
+            ]),
+          ),
+        );
+        setIsHydratingDetails(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [hours, streamKey]);
+
+  const treeItemCount = repoTree.reduce((sum, repo) => {
+    const prCount = showPRs ? repo.prs.length : 0;
+    const commitCount = showCommits
+      ? repo.prs.reduce((repoSum, pr) => repoSum + pr.commits.length, 0)
+      : 0;
+
+    return sum + prCount + commitCount;
+  }, 0);
+  const visibleItemCount = treeItemCount + visibleReviews.length;
+  const hasSelectedActivity =
+    visibleItemCount > 0 || (showTree && repoTree.length > 0);
+
+  const exportPayload = {
+    repoTree: showTree ? repoTree : [],
+    reviews: visibleReviews,
+  };
 
   const STORAGE_KEY = "recap-summary";
   const [completion, setCompletion] = useState("");
@@ -153,15 +341,28 @@ export default function RecapPage() {
   const settings = api.settings.get.useQuery();
 
   async function handleGenerate() {
-    if (!allItems.length) return;
+    if (!hasSelectedActivity || isHydratingDetails) return;
     setIsGenerating(true);
     updateCompletion("");
+
+    const sections: string[] = [];
+    if (showTree) {
+      sections.push(
+        formatRepoTreeForAI(repoTree, {
+          includePRs: showPRs,
+          includeCommits: showCommits,
+        }),
+      );
+    }
+    if (showReviews) {
+      sections.push(formatReviewsForAI(visibleReviews));
+    }
 
     const res = await fetch("/api/recap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        activities: formatActivitiesForAI(allItems),
+        activities: sections.filter(Boolean).join("\n\n"),
         customRule: settings.data?.recapCustomRule ?? undefined,
       }),
     });
@@ -194,7 +395,7 @@ export default function RecapPage() {
           <select
             value={hours}
             onChange={(e) => setHours(Number(e.target.value))}
-            className="h-6 rounded-md border border-border bg-background px-2 text-xs"
+            className="border-border bg-background h-6 rounded-md border px-2 text-xs"
           >
             {HOUR_OPTIONS.map((h) => (
               <option key={h} value={h}>
@@ -215,7 +416,9 @@ export default function RecapPage() {
             size="sm"
             className="gap-1.5 text-xs"
             onClick={handleGenerate}
-            disabled={isGenerating || !allItems.length}
+            disabled={
+              isGenerating || !hasSelectedActivity || isHydratingDetails
+            }
           >
             <HugeiconsIcon
               icon={SparklesIcon}
@@ -237,13 +440,20 @@ export default function RecapPage() {
             <>
               <MetricCard
                 label="Commits"
-                value={recap.data?.commitCount ?? 0}
-                sub={`last ${hours} hours`}
+                value={repoTree.reduce(
+                  (sum, repo) => sum + repo.commitCount,
+                  0,
+                )}
+                sub={
+                  isHydratingDetails
+                    ? "fetching PR details..."
+                    : `last ${hours} hours`
+                }
               />
               <MetricCard
                 label="Pull requests"
                 value={recap.data?.prCount ?? 0}
-                sub={`last ${hours} hours`}
+                sub="current PRs in active repos"
               />
               <MetricCard
                 label="Reviews"
@@ -256,16 +466,25 @@ export default function RecapPage() {
 
         {recap.isLoading ? (
           <ActivityFeedSkeleton rows={8} />
-        ) : allItems.length ? (
+        ) : hasSelectedActivity ? (
           <>
             <div className="mb-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                   Activity
                 </h3>
+                {isHydratingDetails && (
+                  <span className="text-muted-foreground text-[11px]">
+                    Fetching commits and review status...
+                  </span>
+                )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-muted-foreground h-5 gap-1 px-1.5 text-[11px]"
+                    >
                       <HugeiconsIcon icon={Share01Icon} size={12} />
                       Export
                     </Button>
@@ -273,7 +492,7 @@ export default function RecapPage() {
                   <DropdownMenuContent align="start">
                     <DropdownMenuItem
                       onClick={() => {
-                        const json = JSON.stringify(allItems, null, 2);
+                        const json = JSON.stringify(exportPayload, null, 2);
                         void navigator.clipboard.writeText(json);
                       }}
                     >
@@ -282,8 +501,10 @@ export default function RecapPage() {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
-                        const json = JSON.stringify(allItems, null, 2);
-                        const blob = new Blob([json], { type: "application/json" });
+                        const json = JSON.stringify(exportPayload, null, 2);
+                        const blob = new Blob([json], {
+                          type: "application/json",
+                        });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement("a");
                         a.href = url;
@@ -298,76 +519,150 @@ export default function RecapPage() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-              <span className="text-xs text-muted-foreground">
-                {allItems.length} items
+              <span className="text-muted-foreground text-xs">
+                {visibleItemCount} items
               </span>
             </div>
-            <div
-              ref={parentRef}
-              className="h-[550px] overflow-y-auto rounded-md border border-border"
-            >
-              <div
-                className="relative w-full"
-                style={{ height: `${virtualizer.getTotalSize()}px` }}
-              >
-                {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const item = allItems[virtualRow.index]!;
-                  return (
-                    <a
-                      key={item.id}
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="absolute left-0 top-0 flex w-full items-center gap-2.5 border-b border-border px-2 transition-colors hover:bg-secondary/50"
-                      style={{
-                        height: `${virtualRow.size}px`,
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    >
-                      <span
-                        className={`h-2 w-2 shrink-0 rounded-full ${dotColors[item.type] ?? "bg-muted-foreground"}`}
-                      />
-                      <span className="min-w-0 flex-1 truncate text-xs">
-                        {item.title}
-                      </span>
-                      {item.branch && (
-                        <code className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          {item.branch}
-                        </code>
-                      )}
-                      {item.state && (
-                        <ActivityBadge
-                          variant={
-                            item.state as "open" | "merged" | "closed"
-                          }
-                        />
-                      )}
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {item.repoName} · {timeAgo(item.createdAt)}
-                      </span>
-                    </a>
-                  );
-                })}
-              </div>
+
+            <div className="space-y-6">
+              {showTree && (
+                <section className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <HugeiconsIcon
+                      icon={GitPullRequestIcon}
+                      size={14}
+                      className="text-muted-foreground"
+                    />
+                    <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                      PR Activity Tree
+                    </h3>
+                  </div>
+
+                  {repoTree.length ? (
+                    <div className="space-y-3">
+                      {repoTree.map((repo) => (
+                        <Card key={repo.name} className="gap-3 py-3">
+                          <CardContent className="space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-medium">
+                                  {repo.name}
+                                </p>
+                                <p className="text-muted-foreground text-[11px]">
+                                  {repo.prCount} current PR
+                                  {repo.prCount !== 1 ? "s" : ""}
+                                  {" · "}
+                                  {repo.commitCount} commit
+                                  {repo.commitCount !== 1 ? "s" : ""} in range
+                                </p>
+                              </div>
+                            </div>
+
+                            {repo.prs.length ? (
+                              <div className="space-y-3">
+                                {repo.prs.map((pr) => (
+                                  <PRTreeCard
+                                    key={pr.id}
+                                    pr={pr}
+                                    detailState={
+                                      prDetails[pr.id]?.status ?? "loading"
+                                    }
+                                    detailMessage={prDetails[pr.id]?.message}
+                                    showPRs={showPRs}
+                                    showCommits={showCommits}
+                                  />
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-muted-foreground text-xs">
+                                No current pull requests in this repo.
+                              </p>
+                            )}
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="border-border text-muted-foreground rounded-md border border-dashed px-4 py-6 text-sm">
+                      No active repositories matched this recap window.
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {showReviews && (
+                <section className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <HugeiconsIcon
+                      icon={EyeIcon}
+                      size={14}
+                      className="text-muted-foreground"
+                    />
+                    <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                      Reviews
+                    </h3>
+                  </div>
+
+                  {visibleReviews.length ? (
+                    <div className="space-y-2">
+                      {visibleReviews.map((review) => (
+                        <a
+                          key={review.id}
+                          href={review.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="border-border hover:bg-secondary/50 flex items-center gap-3 rounded-md border px-3 py-2 transition-colors"
+                        >
+                          <HugeiconsIcon
+                            icon={EyeIcon}
+                            size={14}
+                            className="shrink-0 text-amber-600"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-medium">
+                              {review.title}
+                            </p>
+                            <p className="text-muted-foreground text-[11px]">
+                              {review.repoName} ·{" "}
+                              {timeAgo(review.updatedAt ?? review.createdAt)}
+                            </p>
+                          </div>
+                          {review.state && (
+                            <ActivityBadge
+                              variant={
+                                review.state as "open" | "merged" | "closed"
+                              }
+                            />
+                          )}
+                        </a>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="border-border text-muted-foreground rounded-md border border-dashed px-4 py-6 text-sm">
+                      No reviews in the selected timeframe.
+                    </p>
+                  )}
+                </section>
+              )}
             </div>
           </>
         ) : (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            No activity in the last 24 hours
+          <p className="text-muted-foreground py-8 text-center text-sm">
+            No activity in the last {hours} hours for the selected filters
           </p>
         )}
 
         {(completion || isGenerating) && (
           <div className="mt-6">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                 AI Summary
               </h3>
               {completion && !isGenerating && (
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 gap-1 px-2 text-[11px] text-muted-foreground"
+                  className="text-muted-foreground h-6 gap-1 px-2 text-[11px]"
                   onClick={() => void navigator.clipboard.writeText(completion)}
                 >
                   <HugeiconsIcon icon={Copy01Icon} size={12} />
@@ -384,6 +679,89 @@ export default function RecapPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function PRTreeCard({
+  pr,
+  detailState,
+  detailMessage,
+  showPRs,
+  showCommits,
+}: {
+  pr: PRTreeItem;
+  detailState: "loading" | "ready" | "error";
+  detailMessage?: string;
+  showPRs: boolean;
+  showCommits: boolean;
+}) {
+  return (
+    <div className="border-border/80 bg-background/60 rounded-md border">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+        <HugeiconsIcon
+          icon={GitPullRequestIcon}
+          size={14}
+          className="shrink-0 text-blue-600"
+        />
+        <a
+          href={pr.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="min-w-0 flex-1 truncate text-xs font-medium hover:underline"
+        >
+          {showPRs ? pr.title : `PR #${pr.number}: ${pr.title}`}
+        </a>
+        {showPRs && <ActivityBadge variant={pr.state} />}
+        {showPRs && pr.reviewStatus && (
+          <ActivityBadge variant={pr.reviewStatus} />
+        )}
+        <span className="text-muted-foreground text-[11px]">
+          #{pr.number} · updated {timeAgo(pr.updatedAt)}
+        </span>
+      </div>
+
+      {showCommits && (
+        <div className="border-border/70 border-t px-1 py-3">
+          {detailState === "loading" ? (
+            <p className="text-muted-foreground px-3 text-[11px]">
+              Fetching commits...
+            </p>
+          ) : detailState === "error" ? (
+            <p className="text-muted-foreground px-3 text-[11px]">
+              {detailMessage ?? "Failed to fetch commits for this PR."}
+            </p>
+          ) : pr.commits.length ? (
+            <div className="space-y-2">
+              {pr.commits.map((commit) => (
+                <a
+                  key={commit.id}
+                  href={commit.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:bg-secondary/40 flex items-center gap-2 rounded-sm px-1 py-1 transition-colors"
+                >
+                  <HugeiconsIcon
+                    icon={GitCommitIcon}
+                    size={14}
+                    className="shrink-0 text-green-600"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-xs">
+                    {commit.title}
+                  </span>
+                  <span className="text-muted-foreground shrink-0 text-[11px]">
+                    {timeAgo(commit.createdAt)}
+                  </span>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground px-3 text-[11px]">
+              No commits landed in the selected timeframe for this PR.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
