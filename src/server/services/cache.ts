@@ -3,13 +3,15 @@ import type { ActivityType } from "./github.types";
 import { fetchCommits, fetchPullRequests, fetchReviews } from "./github";
 
 export const CACHE_TTL_MS = 15 * 60 * 1000;
+export const RECAP_CACHE_TTL_MS = 2 * 60 * 1000;
 
 export function isCacheStale(
   fetchedAt: Date | null,
+  ttlMs = CACHE_TTL_MS,
   now = new Date(),
 ): boolean {
   if (!fetchedAt) return true;
-  return now.getTime() - fetchedAt.getTime() >= CACHE_TTL_MS;
+  return now.getTime() - fetchedAt.getTime() >= ttlMs;
 }
 
 export async function getCachedActivity(
@@ -31,6 +33,7 @@ export async function getCachedActivity(
 
   return {
     data,
+    fetchedAt: mostRecent?.fetchedAt ?? null,
     stale: isCacheStale(mostRecent?.fetchedAt ?? null),
   };
 }
