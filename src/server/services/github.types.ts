@@ -3,6 +3,11 @@ export type PullRequestReviewStatus =
   | "approved"
   | "changes_requested"
   | "review_pending";
+export type PullRequestCIStatus =
+  | "ci_passing"
+  | "ci_failing"
+  | "ci_pending"
+  | "ci_unknown";
 
 export interface Commit {
   sha: string;
@@ -20,6 +25,7 @@ export interface PullRequest {
   url: string;
   state: "open" | "merged" | "closed";
   reviewStatus?: PullRequestReviewStatus;
+  ciStatus?: PullRequestCIStatus;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -97,6 +103,27 @@ export interface GitHubPullRequestReview {
   user: {
     login: string;
   } | null;
+}
+
+export interface GitHubPullRequestDetails {
+  head: {
+    sha: string;
+  };
+}
+
+export interface GitHubCombinedStatus {
+  state: string;
+  total_count: number;
+}
+
+export interface GitHubCheckRun {
+  status: string;
+  conclusion: string | null;
+}
+
+export interface GitHubCheckRunsResponse {
+  total_count: number;
+  check_runs: GitHubCheckRun[];
 }
 
 export interface GitHubSearchCommitItem {

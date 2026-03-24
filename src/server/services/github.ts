@@ -1,6 +1,7 @@
 import type {
   Commit,
   PullRequest,
+  PullRequestCIStatus,
   PullRequestReviewStatus,
   Review,
   GitHubEvent,
@@ -12,6 +13,10 @@ import type {
   GitHubUser,
   GitHubPullRequestCommit,
   GitHubPullRequestReview,
+  GitHubPullRequestDetails,
+  GitHubCombinedStatus,
+  GitHubCheckRun,
+  GitHubCheckRunsResponse,
 } from "./github.types";
 import { GitHubRateLimitError } from "./github.types";
 
@@ -255,7 +260,31 @@ export async function fetchReviews(
     token,
     `is:pr reviewed-by:${login} -author:${login} sort:updated`,
   );
-  return items.map(mapSearchItemToReview);
+  const reviews = await Promise.all(
+    items.map(async (item) => {
+      const review = mapSearchItemToReview(item);
+      const prNumber = extractPullRequestNumber(item.html_url);
+      if (!prNumber) return null;
+
+      const submittedAt = await fetchLatestSubmittedReviewAt(
+        token,
+        review.repoName,
+        prNumber,
+        login,
+      );
+      if (!submittedAt) return null;
+
+      return {
+        ...review,
+        createdAt: submittedAt,
+        updatedAt: submittedAt,
+      };
+    }),
+  );
+
+  return reviews
+    .filter((review): review is Review => review !== null)
+    .toSorted((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 }
 
 export async function fetchCurrentPullRequests(
@@ -326,6 +355,15 @@ export async function fetchPullRequestReviewStatus(
   repoName: string,
   prNumber: number,
 ): Promise<PullRequestReviewStatus> {
+  const reviews = await fetchPullRequestReviews(token, repoName, prNumber);
+  return derivePullRequestReviewStatus(reviews);
+}
+
+async function fetchPullRequestReviews(
+  token: string,
+  repoName: string,
+  prNumber: number,
+): Promise<GitHubPullRequestReview[]> {
   const reviews: GitHubPullRequestReview[] = [];
   let url: string | null =
     `${GITHUB_API}/repos/${repoName}/pulls/${prNumber}/reviews?per_page=100`;
@@ -339,7 +377,37 @@ export async function fetchPullRequestReviewStatus(
     page++;
   }
 
-  return derivePullRequestReviewStatus(reviews);
+  return reviews;
+}
+
+async function fetchLatestSubmittedReviewAt(
+  token: string,
+  repoName: string,
+  prNumber: number,
+  login: string,
+): Promise<Date | null> {
+  const reviews = await fetchPullRequestReviews(token, repoName, prNumber);
+  return deriveLatestSubmittedReviewAt(reviews, login);
+}
+
+export function deriveLatestSubmittedReviewAt(
+  reviews: GitHubPullRequestReview[],
+  login: string,
+): Date | null {
+  let latestTimestamp: number | null = null;
+
+  for (const review of reviews) {
+    if (review.user?.login !== login || !review.submitted_at) continue;
+
+    const submittedAt = new Date(review.submitted_at).getTime();
+    if (!Number.isFinite(submittedAt)) continue;
+
+    if (latestTimestamp === null || submittedAt > latestTimestamp) {
+      latestTimestamp = submittedAt;
+    }
+  }
+
+  return latestTimestamp === null ? null : new Date(latestTimestamp);
 }
 
 export function derivePullRequestReviewStatus(
@@ -386,6 +454,99 @@ export function derivePullRequestReviewStatus(
   }
 
   return "review_pending";
+}
+
+export function derivePullRequestCIStatus(
+  combinedStatusState: string | null | undefined,
+  combinedStatusCount: number | null | undefined,
+  checkRuns: GitHubCheckRun[],
+): PullRequestCIStatus {
+  const normalizedCombined = combinedStatusState?.toLowerCase();
+  const hasLegacyStatuses = (combinedStatusCount ?? 0) > 0;
+  const normalizedChecks = checkRuns.map((checkRun) => ({
+    status: checkRun.status.toLowerCase(),
+    conclusion: checkRun.conclusion?.toLowerCase() ?? null,
+  }));
+
+  if (
+    (normalizedCombined === "pending" && hasLegacyStatuses) ||
+    normalizedChecks.some((checkRun) =>
+      ["queued", "in_progress", "pending", "requested", "waiting"].includes(
+        checkRun.status,
+      ),
+    )
+  ) {
+    return "ci_pending";
+  }
+
+  if (
+    normalizedCombined === "failure" ||
+    normalizedCombined === "error" ||
+    normalizedChecks.some((checkRun) =>
+      [
+        "failure",
+        "failed",
+        "timed_out",
+        "cancelled",
+        "startup_failure",
+        "action_required",
+        "stale",
+      ].includes(checkRun.conclusion ?? ""),
+    )
+  ) {
+    return "ci_failing";
+  }
+
+  if (
+    normalizedCombined === "success" ||
+    normalizedChecks.some((checkRun) =>
+      ["success", "neutral", "skipped"].includes(checkRun.conclusion ?? ""),
+    )
+  ) {
+    return "ci_passing";
+  }
+
+  return "ci_unknown";
+}
+
+export async function fetchPullRequestCIStatus(
+  token: string,
+  repoName: string,
+  prNumber: number,
+): Promise<PullRequestCIStatus> {
+  const prResponse = await githubFetch(
+    token,
+    `${GITHUB_API}/repos/${repoName}/pulls/${prNumber}`,
+  );
+  const pr = (await prResponse.json()) as GitHubPullRequestDetails;
+  const headSha = pr.head.sha;
+
+  const [combinedStatusResponse, checkRunsResponse] = await Promise.allSettled([
+    githubFetch(
+      token,
+      `${GITHUB_API}/repos/${repoName}/commits/${headSha}/status`,
+    ),
+    githubFetch(
+      token,
+      `${GITHUB_API}/repos/${repoName}/commits/${headSha}/check-runs?per_page=100`,
+    ),
+  ]);
+
+  const combinedStatus =
+    combinedStatusResponse.status === "fulfilled"
+      ? ((await combinedStatusResponse.value.json()) as GitHubCombinedStatus)
+      : null;
+  const checkRuns =
+    checkRunsResponse.status === "fulfilled"
+      ? ((await checkRunsResponse.value.json()) as GitHubCheckRunsResponse)
+          .check_runs
+      : [];
+
+  return derivePullRequestCIStatus(
+    combinedStatus?.state,
+    combinedStatus?.total_count,
+    checkRuns,
+  );
 }
 
 async function fetchSearchResults(
