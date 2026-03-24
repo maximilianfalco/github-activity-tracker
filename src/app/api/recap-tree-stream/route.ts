@@ -1,12 +1,14 @@
 import { auth } from "~/server/auth";
 import {
+  fetchPullRequestCIStatus,
   fetchPullRequestCommits,
   fetchPullRequestReviewStatus,
 } from "~/server/services/github";
 import { GitHubRateLimitError } from "~/server/services/github.types";
 
 type RecapStreamRequest = {
-  hours: number;
+  hours?: number;
+  cutoffIso?: string;
   prs: Array<{
     id: string;
     repoName: string;
@@ -20,8 +22,10 @@ export async function POST(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const { hours, prs } = (await req.json()) as RecapStreamRequest;
-  const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+  const { hours, cutoffIso, prs } = (await req.json()) as RecapStreamRequest;
+  const cutoff = cutoffIso
+    ? new Date(cutoffIso)
+    : new Date(Date.now() - (hours ?? 24) * 60 * 60 * 1000);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -30,52 +34,64 @@ export async function POST(req: Request) {
         controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
 
       try {
-        for (const pr of prs) {
-          if (req.signal.aborted) break;
+        await Promise.allSettled(
+          prs.map(async (pr) => {
+            if (req.signal.aborted) return;
 
-          try {
-            const [commits, reviewStatus] = await Promise.all([
-              fetchPullRequestCommits(
-                session.accessToken!,
-                pr.repoName,
-                pr.number,
-              ),
-              fetchPullRequestReviewStatus(
-                session.accessToken!,
-                pr.repoName,
-                pr.number,
-              ),
-            ]);
+            try {
+              const [commits, reviewStatus, ciStatus] = await Promise.all([
+                fetchPullRequestCommits(
+                  session.accessToken!,
+                  pr.repoName,
+                  pr.number,
+                ),
+                fetchPullRequestReviewStatus(
+                  session.accessToken!,
+                  pr.repoName,
+                  pr.number,
+                ),
+                fetchPullRequestCIStatus(
+                  session.accessToken!,
+                  pr.repoName,
+                  pr.number,
+                ),
+              ]);
 
-            write({
-              type: "pr_detail",
-              prId: pr.id,
-              reviewStatus,
-              commits: commits
-                .filter((commit) => commit.createdAt >= cutoff)
-                .map((commit) => ({
-                  id: `commit:${commit.sha}`,
-                  type: "commit" as const,
-                  title: commit.message,
-                  url: commit.url,
-                  repoName: commit.repoName,
-                  branch: commit.branch,
-                  state: null,
-                  sha: commit.sha,
-                  createdAt: commit.createdAt,
-                })),
-            });
-          } catch (error) {
-            write({
-              type: "pr_error",
-              prId: pr.id,
-              message:
-                error instanceof GitHubRateLimitError
-                  ? error.message
-                  : "Failed to fetch PR details.",
-            });
-          }
-        }
+              if (req.signal.aborted) return;
+
+              write({
+                type: "pr_detail",
+                prId: pr.id,
+                ciStatus,
+                reviewStatus,
+                commits: commits
+                  .filter((commit) => commit.createdAt >= cutoff)
+                  .map((commit) => ({
+                    id: `commit:${commit.sha}`,
+                    type: "commit" as const,
+                    title: commit.message,
+                    url: commit.url,
+                    repoName: commit.repoName,
+                    branch: commit.branch,
+                    state: null,
+                    sha: commit.sha,
+                    createdAt: commit.createdAt,
+                  })),
+              });
+            } catch (error) {
+              if (req.signal.aborted) return;
+
+              write({
+                type: "pr_error",
+                prId: pr.id,
+                message:
+                  error instanceof GitHubRateLimitError
+                    ? error.message
+                    : "Failed to fetch PR details.",
+              });
+            }
+          }),
+        );
 
         write({ type: "done" });
         controller.close();

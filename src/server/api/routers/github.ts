@@ -1,22 +1,61 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
-import { getCachedActivity, refreshCache } from "~/server/services/cache";
+import {
+  getCachedActivity,
+  isCacheStale,
+  RECAP_CACHE_TTL_MS,
+  refreshCache,
+} from "~/server/services/cache";
 import {
   extractPullRequestNumber,
+  fetchPullRequestCIStatus,
   fetchLogin,
   fetchPullRequestReviewStatus,
+  fetchReviews,
 } from "~/server/services/github";
 import {
   GitHubRateLimitError,
+  type PullRequestCIStatus,
+  type Review,
   type PullRequestReviewStatus,
 } from "~/server/services/github.types";
 
 const dateRangeSchema = z.enum(["1d", "7d", "30d", "90d"]).default("30d");
+const recapInputSchema = z
+  .object({
+    hours: z.number().int().min(12).max(72).optional(),
+    cutoffIso: z.string().datetime().optional(),
+  })
+  .default({});
+type PullRequestAgeLabel = "new" | "existing";
 
 function daysAgo(range: "1d" | "7d" | "30d" | "90d"): Date {
   const days = { "1d": 2, "7d": 7, "30d": 30, "90d": 90 }[range];
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+}
+
+function effectiveDate(item: CachedActivityItem): Date {
+  return item.updatedAt ?? item.createdAt;
+}
+
+function getPullRequestAgeLabel(
+  createdAt: Date,
+  cutoff: Date,
+): PullRequestAgeLabel {
+  return createdAt >= cutoff ? "new" : "existing";
+}
+
+function resolveRecapCutoff(input: {
+  hours?: number;
+  cutoffIso?: string;
+}): Date {
+  if (input.cutoffIso) {
+    return new Date(input.cutoffIso);
+  }
+
+  const hours = input.hours ?? 24;
+  return new Date(Date.now() - hours * 60 * 60 * 1000);
 }
 
 async function getTokenAndLogin(ctx: {
@@ -46,6 +85,32 @@ function handleGitHubError(error: unknown): never {
   throw error;
 }
 
+async function getFreshCachedActivity(
+  ctx: {
+    session: {
+      user: { id: string };
+      accessToken: string | null;
+      githubLogin: string | null;
+    };
+    db: Parameters<typeof getCachedActivity>[0];
+  },
+  type?: "commit" | "pr" | "review",
+  ttlMs?: number,
+) {
+  const cached = await getCachedActivity(ctx.db, ctx.session.user.id, type);
+  if (!isCacheStale(cached.fetchedAt, ttlMs)) return cached.data;
+
+  try {
+    const { token, login } = await getTokenAndLogin(ctx);
+    await refreshCache(ctx.db, ctx.session.user.id, token, login);
+    const fresh = await getCachedActivity(ctx.db, ctx.session.user.id, type);
+    return fresh.data;
+  } catch (error) {
+    if (cached.data.length > 0) return cached.data;
+    handleGitHubError(error);
+  }
+}
+
 type CachedActivityItem = Awaited<
   ReturnType<typeof getCachedActivity>
 >["data"][number];
@@ -71,6 +136,8 @@ type RecapPRItem = {
   repoName: string;
   branch: null;
   state: "open" | "merged" | "closed";
+  ageLabel: PullRequestAgeLabel;
+  ciStatus: PullRequestCIStatus | null;
   reviewStatus: PullRequestReviewStatus | null;
   createdAt: Date;
   updatedAt: Date;
@@ -96,15 +163,15 @@ type RecapReviewItem = {
   updatedAt: Date | null;
 };
 
-function buildReviewItem(item: CachedActivityItem): RecapReviewItem {
+function buildReviewItemFromGitHub(item: Review): RecapReviewItem {
   return {
-    id: item.id,
+    id: `review:${item.url}`,
     type: "review",
     title: item.title,
     url: item.url,
     repoName: item.repoName,
-    branch: item.branch,
-    state: item.state as "open" | "merged" | "closed" | null,
+    branch: null,
+    state: item.state,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
   };
@@ -135,6 +202,8 @@ function buildFallbackTree(
       repoName: item.repoName,
       branch: null,
       state: "open",
+      ageLabel: getPullRequestAgeLabel(item.createdAt, cutoff),
+      ciStatus: null,
       reviewStatus: null,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt ?? item.createdAt,
@@ -182,11 +251,7 @@ export const githubRouter = createTRPCRouter({
   getCommits: protectedProcedure
     .input(z.object({ dateRange: dateRangeSchema }).default({}))
     .query(async ({ ctx, input }) => {
-      const { data } = await getCachedActivity(
-        ctx.db,
-        ctx.session.user.id,
-        "commit",
-      );
+      const data = await getFreshCachedActivity(ctx, "commit");
       const cutoff = daysAgo(input.dateRange);
       return data.filter((d) => d.createdAt >= cutoff);
     }),
@@ -201,14 +266,14 @@ export const githubRouter = createTRPCRouter({
         .default({}),
     )
     .query(async ({ ctx, input }) => {
-      const { data } = await getCachedActivity(
-        ctx.db,
-        ctx.session.user.id,
+      const data = await getFreshCachedActivity(
+        ctx,
         "pr",
+        RECAP_CACHE_TTL_MS,
       );
       const cutoff = daysAgo(input.dateRange);
       const filtered = data
-        .filter((d) => d.createdAt >= cutoff)
+        .filter((d) => effectiveDate(d) >= cutoff)
         .filter((d) => !input.state || d.state === input.state);
 
       try {
@@ -217,36 +282,70 @@ export const githubRouter = createTRPCRouter({
           filtered.map(async (pr) => {
             const prNumber = extractPullRequestNumber(pr.url);
             if (!prNumber) {
-              return { ...pr, reviewStatus: "review_pending" as const };
+              return {
+                ...pr,
+                ageLabel: getPullRequestAgeLabel(pr.createdAt, cutoff),
+                ciStatus: "ci_unknown" as const,
+                reviewStatus: "review_pending" as const,
+              };
             }
 
-            const reviewStatus = await fetchPullRequestReviewStatus(
-              token,
-              pr.repoName,
-              prNumber,
-            );
+            const [reviewStatus, ciStatus] = await Promise.all([
+              fetchPullRequestReviewStatus(token, pr.repoName, prNumber),
+              fetchPullRequestCIStatus(token, pr.repoName, prNumber),
+            ]);
 
-            return { ...pr, reviewStatus };
+            return {
+              ...pr,
+              ageLabel: getPullRequestAgeLabel(pr.createdAt, cutoff),
+              ciStatus,
+              reviewStatus,
+            };
           }),
         );
       } catch {
         return filtered.map((pr) => ({
           ...pr,
+          ageLabel: getPullRequestAgeLabel(pr.createdAt, cutoff),
+          ciStatus: "ci_unknown" as const,
           reviewStatus: "review_pending" as const,
         }));
+      }
+    }),
+
+  getPullRequestCIStatus: protectedProcedure
+    .input(
+      z.object({
+        repoName: z.string().min(1),
+        prNumber: z.number().int().positive(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        const { token } = await getTokenAndLogin(ctx);
+        return await fetchPullRequestCIStatus(
+          token,
+          input.repoName,
+          input.prNumber,
+        );
+      } catch {
+        return "ci_unknown" as const;
       }
     }),
 
   getReviews: protectedProcedure
     .input(z.object({ dateRange: dateRangeSchema }).default({}))
     .query(async ({ ctx, input }) => {
-      const { data } = await getCachedActivity(
-        ctx.db,
-        ctx.session.user.id,
-        "review",
-      );
       const cutoff = daysAgo(input.dateRange);
-      return data.filter((d) => d.createdAt >= cutoff);
+      try {
+        const { token, login } = await getTokenAndLogin(ctx);
+        const reviews = await fetchReviews(token, login);
+        return reviews
+          .filter((review) => review.createdAt >= cutoff)
+          .map(buildReviewItemFromGitHub);
+      } catch {
+        return [];
+      }
     }),
 
   getRepoBreakdown: protectedProcedure.query(async ({ ctx }) => {
@@ -282,24 +381,22 @@ export const githubRouter = createTRPCRouter({
   }),
 
   getRecap: protectedProcedure
-    .input(
-      z
-        .object({ hours: z.number().int().min(12).max(72).default(24) })
-        .default({}),
-    )
+    .input(recapInputSchema)
     .query(async ({ ctx, input }) => {
-      const { data } = await getCachedActivity(ctx.db, ctx.session.user.id);
+      const data = await getFreshCachedActivity(
+        ctx,
+        undefined,
+        RECAP_CACHE_TTL_MS,
+      );
 
       const settings = await ctx.db.userSettings.findUnique({
         where: { userId: ctx.session.user.id },
       });
       const savedRepos = settings?.recapIncludedRepos ?? [];
 
-      const cutoff = new Date(Date.now() - input.hours * 60 * 60 * 1000);
+      const cutoff = resolveRecapCutoff(input);
       const allRepoNames = [...new Set(data.map((d) => d.repoName))].toSorted();
 
-      const effectiveDate = (d: CachedActivityItem) =>
-        d.updatedAt ?? d.createdAt;
       const activeRepoNames = [
         ...new Set(
           data.filter((d) => effectiveDate(d) >= cutoff).map((d) => d.repoName),
@@ -313,18 +410,23 @@ export const githubRouter = createTRPCRouter({
         included.has(repoName),
       );
 
-      const reviews = data
-        .filter((item) => item.type === "review")
-        .filter(
-          (item) =>
-            effectiveDate(item) >= cutoff && included.has(item.repoName),
-        )
-        .map(buildReviewItem)
-        .toSorted(
-          (a, b) =>
-            (b.updatedAt ?? b.createdAt).getTime() -
-            (a.updatedAt ?? a.createdAt).getTime(),
-        );
+      let reviews: RecapReviewItem[] = [];
+      try {
+        const { token, login } = await getTokenAndLogin(ctx);
+        reviews = (await fetchReviews(token, login))
+          .filter(
+            (review) =>
+              review.createdAt >= cutoff && included.has(review.repoName),
+          )
+          .map(buildReviewItemFromGitHub)
+          .toSorted(
+            (a, b) =>
+              (b.updatedAt ?? b.createdAt).getTime() -
+              (a.updatedAt ?? a.createdAt).getTime(),
+          );
+      } catch {
+        reviews = [];
+      }
 
       const repoTree = buildFallbackTree(data, includedActiveRepoNames, cutoff);
 
