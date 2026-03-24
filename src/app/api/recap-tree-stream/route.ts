@@ -2,6 +2,7 @@ import { auth } from "~/server/auth";
 import {
   fetchPullRequestCIStatus,
   fetchPullRequestCommits,
+  fetchPullRequestDiscussionComments,
   fetchPullRequestReviewStatus,
 } from "~/server/services/github";
 import { GitHubRateLimitError } from "~/server/services/github.types";
@@ -9,6 +10,7 @@ import { GitHubRateLimitError } from "~/server/services/github.types";
 type RecapStreamRequest = {
   hours?: number;
   cutoffIso?: string;
+  includeComments?: boolean;
   prs: Array<{
     id: string;
     repoName: string;
@@ -22,7 +24,8 @@ export async function POST(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const { hours, cutoffIso, prs } = (await req.json()) as RecapStreamRequest;
+  const { hours, cutoffIso, includeComments, prs } =
+    (await req.json()) as RecapStreamRequest;
   const cutoff = cutoffIso
     ? new Date(cutoffIso)
     : new Date(Date.now() - (hours ?? 24) * 60 * 60 * 1000);
@@ -39,7 +42,8 @@ export async function POST(req: Request) {
             if (req.signal.aborted) return;
 
             try {
-              const [commits, reviewStatus, ciStatus] = await Promise.all([
+              const [commits, reviewStatus, ciStatus, comments] =
+                await Promise.all([
                 fetchPullRequestCommits(
                   session.accessToken!,
                   pr.repoName,
@@ -55,7 +59,14 @@ export async function POST(req: Request) {
                   pr.repoName,
                   pr.number,
                 ),
-              ]);
+                includeComments
+                  ? fetchPullRequestDiscussionComments(
+                      session.accessToken!,
+                      pr.repoName,
+                      pr.number,
+                    )
+                  : Promise.resolve([]),
+                ]);
 
               if (req.signal.aborted) return;
 
@@ -76,6 +87,12 @@ export async function POST(req: Request) {
                     state: null,
                     sha: commit.sha,
                     createdAt: commit.createdAt,
+                  })),
+                comments: comments
+                  .filter((comment) => comment.updatedAt >= cutoff)
+                  .slice(0, 5)
+                  .map((comment) => ({
+                    ...comment,
                   })),
               });
             } catch (error) {

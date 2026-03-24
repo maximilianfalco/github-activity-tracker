@@ -15,6 +15,7 @@ export const settingsRouter = createTRPCRouter({
         notifyStatus: false,
         recapIncludedRepos: [] as string[],
         recapCustomRule: "",
+        recapIncludeComments: false,
       }
     );
   }),
@@ -28,6 +29,7 @@ export const settingsRouter = createTRPCRouter({
         notifyStatus: z.boolean().optional(),
         recapIncludedRepos: z.array(z.string()).optional(),
         recapCustomRule: z.string().optional(),
+        recapIncludeComments: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

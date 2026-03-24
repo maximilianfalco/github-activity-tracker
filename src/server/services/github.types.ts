@@ -40,6 +40,15 @@ export interface Review {
   updatedAt: Date;
 }
 
+export interface PullRequestDiscussionComment {
+  id: string;
+  author: string | null;
+  body: string;
+  url: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface GitHubEvent {
   type: string;
   repo: { name: string };
@@ -100,8 +109,34 @@ export interface GitHubPullRequestCommit {
 }
 
 export interface GitHubPullRequestReview {
+  id?: number;
   state: string;
+  body?: string | null;
+  html_url?: string;
   submitted_at: string | null;
+  updated_at?: string | null;
+  user: {
+    login: string;
+  } | null;
+}
+
+export interface GitHubIssueComment {
+  id: number;
+  body: string;
+  html_url: string;
+  created_at: string;
+  updated_at: string;
+  user: {
+    login: string;
+  } | null;
+}
+
+export interface GitHubPullRequestReviewComment {
+  id: number;
+  body: string;
+  html_url: string;
+  created_at: string;
+  updated_at: string;
   user: {
     login: string;
   } | null;

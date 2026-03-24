@@ -85,6 +85,7 @@ model UserSettings {
     notifyStatus       Boolean  @default(false)
     recapIncludedRepos String[] @default([])
     recapCustomRule    String   @default("")
+    recapIncludeComments Boolean @default(false)
 
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

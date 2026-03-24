@@ -17,6 +17,9 @@ import type {
   GitHubCombinedStatus,
   GitHubCheckRun,
   GitHubCheckRunsResponse,
+  GitHubIssueComment,
+  GitHubPullRequestReviewComment,
+  PullRequestDiscussionComment,
 } from "./github.types";
 import { GitHubRateLimitError } from "./github.types";
 
@@ -374,6 +377,58 @@ export async function fetchPullRequestReviewStatus(
   return derivePullRequestReviewStatus(reviews);
 }
 
+export async function fetchPullRequestDiscussionComments(
+  token: string,
+  repoName: string,
+  prNumber: number,
+): Promise<PullRequestDiscussionComment[]> {
+  const [issueComments, reviews, reviewComments] = await Promise.all([
+    fetchIssueComments(token, repoName, prNumber),
+    fetchPullRequestReviews(token, repoName, prNumber),
+    fetchPullRequestReviewComments(token, repoName, prNumber),
+  ]);
+
+  const discussionComments = [
+    ...issueComments
+      .filter((comment) => comment.body.trim().length > 0)
+      .map((comment) => ({
+        id: `issue-comment:${comment.id}`,
+        author: comment.user?.login ?? null,
+        body: comment.body.trim(),
+        url: comment.html_url,
+        createdAt: new Date(comment.created_at),
+        updatedAt: new Date(comment.updated_at),
+      })),
+    ...reviewComments
+      .filter((comment) => comment.body.trim().length > 0)
+      .map((comment) => ({
+        id: `review-comment:${comment.id}`,
+        author: comment.user?.login ?? null,
+        body: comment.body.trim(),
+        url: comment.html_url,
+        createdAt: new Date(comment.created_at),
+        updatedAt: new Date(comment.updated_at),
+      })),
+    ...reviews
+      .filter((review) => (review.body?.trim().length ?? 0) > 0)
+      .filter((review) => review.submitted_at)
+      .map((review) => ({
+        id: `review:${review.id ?? review.submitted_at}`,
+        author: review.user?.login ?? null,
+        body: review.body!.trim(),
+        url:
+          review.html_url ??
+          `https://github.com/${repoName}/pull/${prNumber}#pullrequestreview-${review.id ?? ""}`,
+        createdAt: new Date(review.submitted_at!),
+        updatedAt: new Date(review.updated_at ?? review.submitted_at!),
+      })),
+  ];
+
+  return discussionComments.toSorted(
+    (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
+  );
+}
+
 async function fetchPullRequestReviews(
   token: string,
   repoName: string,
@@ -393,6 +448,48 @@ async function fetchPullRequestReviews(
   }
 
   return reviews;
+}
+
+async function fetchIssueComments(
+  token: string,
+  repoName: string,
+  prNumber: number,
+): Promise<GitHubIssueComment[]> {
+  const comments: GitHubIssueComment[] = [];
+  let url: string | null =
+    `${GITHUB_API}/repos/${repoName}/issues/${prNumber}/comments?per_page=100`;
+  let page = 0;
+
+  while (url && page < 5) {
+    const response = await githubFetch(token, url);
+    const data = (await response.json()) as GitHubIssueComment[];
+    comments.push(...data);
+    url = parseNextUrl(response.headers.get("link"));
+    page++;
+  }
+
+  return comments;
+}
+
+async function fetchPullRequestReviewComments(
+  token: string,
+  repoName: string,
+  prNumber: number,
+): Promise<GitHubPullRequestReviewComment[]> {
+  const comments: GitHubPullRequestReviewComment[] = [];
+  let url: string | null =
+    `${GITHUB_API}/repos/${repoName}/pulls/${prNumber}/comments?per_page=100`;
+  let page = 0;
+
+  while (url && page < 5) {
+    const response = await githubFetch(token, url);
+    const data = (await response.json()) as GitHubPullRequestReviewComment[];
+    comments.push(...data);
+    url = parseNextUrl(response.headers.get("link"));
+    page++;
+  }
+
+  return comments;
 }
 
 async function fetchLatestSubmittedReviewAt(

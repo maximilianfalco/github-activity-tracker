@@ -14,6 +14,17 @@ interface SettingsForm {
   notifyReviews: boolean;
   notifyStatus: boolean;
   recapCustomRule: string;
+  recapIncludeComments: boolean;
+}
+
+function getRecapIncludeComments(
+  settings: unknown,
+) {
+  if (!settings || typeof settings !== "object") return false;
+  if (!("recapIncludeComments" in settings)) return false;
+  return Boolean(
+    (settings as { recapIncludeComments?: unknown }).recapIncludeComments,
+  );
 }
 
 function Toggle({
@@ -94,6 +105,7 @@ export default function SettingsPage() {
       notifyReviews: true,
       notifyStatus: false,
       recapCustomRule: "",
+      recapIncludeComments: false,
     },
   });
 
@@ -105,6 +117,7 @@ export default function SettingsPage() {
         notifyReviews: settings.data.notifyReviews,
         notifyStatus: settings.data.notifyStatus,
         recapCustomRule: settings.data.recapCustomRule ?? "",
+        recapIncludeComments: getRecapIncludeComments(settings.data),
       });
     }
   }, [settings.data, reset]);
@@ -152,6 +165,18 @@ export default function SettingsPage() {
             </SettingsGroup>
 
             <SettingsGroup title="AI Recap">
+              <SettingsRow label="Include recent PR discussions">
+                <Controller
+                  control={control}
+                  name="recapIncludeComments"
+                  render={({ field }) => (
+                    <Toggle
+                      checked={field.value}
+                      onChange={field.onChange}
+                    />
+                  )}
+                />
+              </SettingsRow>
               <Controller
                 control={control}
                 name="recapCustomRule"

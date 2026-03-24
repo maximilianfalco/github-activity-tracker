@@ -40,12 +40,25 @@ type RepoTreeItem = RecapData["repoTree"][number];
 type PRTreeItem = RepoTreeItem["prs"][number];
 type ReviewItem = RecapData["reviews"][number];
 type CommitItem = PRTreeItem["commits"][number];
+type DiscussionCommentItem = {
+  id: string;
+  author: string | null;
+  body: string;
+  url: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+type HydratedPRTreeItem = PRTreeItem & { comments: DiscussionCommentItem[] };
+type HydratedRepoTreeItem = Omit<RepoTreeItem, "prs"> & {
+  prs: HydratedPRTreeItem[];
+};
 
 type PRDetailState = {
   status: "loading" | "ready" | "error";
   ciStatus: PRTreeItem["ciStatus"];
   reviewStatus: PRTreeItem["reviewStatus"];
   commits: CommitItem[];
+  comments: DiscussionCommentItem[];
   message?: string;
 };
 
@@ -56,6 +69,7 @@ type RecapStreamChunk =
       ciStatus: PRTreeItem["ciStatus"];
       reviewStatus: PRTreeItem["reviewStatus"];
       commits: CommitItem[];
+      comments: DiscussionCommentItem[];
     }
   | {
       type: "pr_error";
@@ -78,11 +92,22 @@ type RecapWindowOption =
     };
 
 type RecapSummaryCache = Record<string, string>;
+type RecapViewMode = "cards" | "json";
+
+function getRecapIncludeComments(
+  settings: unknown,
+) {
+  if (!settings || typeof settings !== "object") return false;
+  if (!("recapIncludeComments" in settings)) return false;
+  return Boolean(
+    (settings as { recapIncludeComments?: unknown }).recapIncludeComments,
+  );
+}
 
 function mergeRepoTree(
   repoTree: RepoTreeItem[],
   prDetails: Record<string, PRDetailState>,
-): RepoTreeItem[] {
+): HydratedRepoTreeItem[] {
   return repoTree.map((repo) => {
     const prs = repo.prs.map((pr) => {
       const detail = prDetails[pr.id];
@@ -91,6 +116,7 @@ function mergeRepoTree(
         ciStatus: detail?.ciStatus ?? pr.ciStatus,
         reviewStatus: detail?.reviewStatus ?? pr.reviewStatus,
         commits: detail?.status === "ready" ? detail.commits : pr.commits,
+        comments: detail?.status === "ready" ? detail.comments : [],
       };
     });
 
@@ -107,10 +133,11 @@ function formatTimestampForAI(date: Date): string {
 }
 
 function formatRepoTreeForAI(
-  repoTree: RepoTreeItem[],
+  repoTree: HydratedRepoTreeItem[],
   options: {
     includePRs: boolean;
     includeCommits: boolean;
+    includeComments: boolean;
   },
 ): string {
   const lines: string[] = [];
@@ -130,17 +157,30 @@ function formatRepoTreeForAI(
         `- ${prLabel} #${pr.number}: "${pr.title}" [${pr.state}; ${pr.ageLabel}; ci: ${pr.ciStatus ?? "unknown"}; review: ${pr.reviewStatus ?? "unknown"}] ${pr.url} (updated ${formatTimestampForAI(pr.updatedAt)})`,
       );
 
-      if (!options.includeCommits) continue;
+      if (options.includeCommits) {
+        if (pr.commits.length === 0) {
+          lines.push("  - No commits from the selected timeframe.");
+        } else {
+          lines.push("  - Commits:");
+          for (const commit of pr.commits) {
+            lines.push(
+              `    - "${commit.title}" ${commit.url} (${formatTimestampForAI(commit.createdAt)})`,
+            );
+          }
+        }
+      }
 
-      if (pr.commits.length === 0) {
-        lines.push("  - No commits from the selected timeframe.");
+      if (!options.includeComments) continue;
+
+      if (pr.comments.length === 0) {
+        lines.push("  - Recent discussion: none in the selected timeframe.");
         continue;
       }
 
-      lines.push("  - Commits:");
-      for (const commit of pr.commits) {
+      lines.push("  - Recent discussion:");
+      for (const comment of pr.comments) {
         lines.push(
-          `    - "${commit.title}" ${commit.url} (${formatTimestampForAI(commit.createdAt)})`,
+          `    - ${(comment.author ?? "unknown")}: "${comment.body}" ${comment.url} (${formatTimestampForAI(comment.updatedAt)})`,
         );
       }
     }
@@ -226,6 +266,7 @@ function writeSummaryCache(
 export default function RecapPage() {
   const [selectedWindow, setSelectedWindow] =
     useState<RecapWindowOption["value"]>("today");
+  const [viewMode, setViewMode] = useState<RecapViewMode>("cards");
   const [includedTypes, setIncludedTypes] = useState(
     () => new Set(["commit", "pr", "review"]),
   );
@@ -256,6 +297,8 @@ export default function RecapPage() {
   const showCommits = includedTypes.has("commit");
   const showReviews = includedTypes.has("review");
   const showTree = showPRs || showCommits;
+  const settings = api.settings.get.useQuery();
+  const includeComments = getRecapIncludeComments(settings.data);
 
   const repoTreeShell = useMemo(() => recap.data?.repoTree ?? [], [recap.data]);
   const visibleReviews = useMemo(
@@ -285,6 +328,7 @@ export default function RecapPage() {
             ciStatus: null,
             reviewStatus: null,
             commits: [],
+            comments: [],
           },
         ]),
       ),
@@ -294,23 +338,25 @@ export default function RecapPage() {
     () =>
       JSON.stringify({
         ...recapInput,
+        includeComments,
         prs: streamPrs.map(({ id, repoName, number }) => ({
           id,
           repoName,
           number,
         })),
       }),
-    [recapInput, streamPrs],
+    [includeComments, recapInput, streamPrs],
   );
   const streamPrCount = streamPrs.length;
   const streamKey = useMemo(
     () =>
       [
         selectedWindow,
+        includeComments ? "comments:on" : "comments:off",
         cutoffIso ?? hours,
         ...streamPrs.map((pr) => `${pr.id}:${pr.updatedAt.toISOString()}`),
       ].join("|"),
-    [cutoffIso, hours, selectedWindow, streamPrs],
+    [cutoffIso, hours, includeComments, selectedWindow, streamPrs],
   );
 
   useEffect(() => {
@@ -365,6 +411,11 @@ export default function RecapPage() {
                     ...commit,
                     createdAt: new Date(commit.createdAt),
                   })),
+                  comments: chunk.comments.map((comment) => ({
+                    ...comment,
+                    createdAt: new Date(comment.createdAt),
+                    updatedAt: new Date(comment.updatedAt),
+                  })),
                 },
               }));
               continue;
@@ -378,6 +429,7 @@ export default function RecapPage() {
                   ciStatus: null,
                   reviewStatus: null,
                   commits: [],
+                  comments: [],
                   message: chunk.message,
                 },
               }));
@@ -405,6 +457,7 @@ export default function RecapPage() {
                     ciStatus: null,
                     reviewStatus: null,
                     commits: [],
+                    comments: [],
                     message:
                       error instanceof Error
                         ? error.message
@@ -436,10 +489,13 @@ export default function RecapPage() {
     repoTree: showTree ? repoTree : [],
     reviews: visibleReviews,
   };
+  const rawJson = useMemo(
+    () => JSON.stringify(exportPayload, null, 2),
+    [exportPayload],
+  );
 
   const STORAGE_KEY = "recap-summary-cache-v1";
   const [completion, setCompletion] = useState("");
-  const settings = api.settings.get.useQuery();
   const selectedTypes = useMemo(
     () => [...includedTypes].toSorted(),
     [includedTypes],
@@ -452,6 +508,7 @@ export default function RecapPage() {
         formatRepoTreeForAI(repoTree, {
           includePRs: showPRs,
           includeCommits: showCommits,
+          includeComments,
         }),
       );
     }
@@ -460,7 +517,15 @@ export default function RecapPage() {
     }
 
     return sections.filter(Boolean).join("\n\n");
-  }, [repoTree, showCommits, showPRs, showReviews, showTree, visibleReviews]);
+  }, [
+    includeComments,
+    repoTree,
+    showCommits,
+    showPRs,
+    showReviews,
+    showTree,
+    visibleReviews,
+  ]);
   const recapCacheKey = useMemo(() => {
     const cacheInput = JSON.stringify({
       window: selectedWindow,
@@ -469,6 +534,7 @@ export default function RecapPage() {
       includedTypes: selectedTypes,
       includedRepos: recap.data?.includedRepos ?? [],
       customRule: settings.data?.recapCustomRule ?? "",
+      includeComments,
       activities: recapActivities,
     });
 
@@ -480,6 +546,7 @@ export default function RecapPage() {
     recapActivities,
     selectedTypes,
     selectedWindow,
+    includeComments,
     settings.data?.recapCustomRule,
   ]);
 
@@ -649,6 +716,30 @@ export default function RecapPage() {
                     Fetching commits and review status...
                   </span>
                 )}
+                <div className="border-border bg-background inline-flex rounded-md border p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("cards")}
+                    className={`rounded px-2 py-1 text-[11px] transition-colors ${
+                      viewMode === "cards"
+                        ? "bg-secondary text-foreground"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    Cards
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("json")}
+                    className={`rounded px-2 py-1 text-[11px] transition-colors ${
+                      viewMode === "json"
+                        ? "bg-secondary text-foreground"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    JSON
+                  </button>
+                </div>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -663,8 +754,7 @@ export default function RecapPage() {
                   <DropdownMenuContent align="start">
                     <DropdownMenuItem
                       onClick={() => {
-                        const json = JSON.stringify(exportPayload, null, 2);
-                        void copyToClipboard(json, "Copied JSON to clipboard");
+                        void copyToClipboard(rawJson, "Copied JSON to clipboard");
                       }}
                     >
                       <HugeiconsIcon icon={Copy01Icon} size={14} />
@@ -672,8 +762,7 @@ export default function RecapPage() {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
-                        const json = JSON.stringify(exportPayload, null, 2);
-                        const blob = new Blob([json], {
+                        const blob = new Blob([rawJson], {
                           type: "application/json",
                         });
                         const url = URL.createObjectURL(blob);
@@ -695,123 +784,131 @@ export default function RecapPage() {
               </span>
             </div>
 
-            <div className="space-y-6">
-              {showTree && (
-                <section className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <HugeiconsIcon
-                      icon={GitPullRequestIcon}
-                      size={14}
-                      className="text-muted-foreground"
-                    />
-                    <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
-                      PR Activity Tree
-                    </h3>
-                  </div>
+            {viewMode === "json" ? (
+              <div className="border-border bg-muted/20 max-h-[70vh] overflow-y-auto overflow-x-hidden rounded-md border p-3">
+                <pre className="text-foreground w-full overflow-x-hidden whitespace-pre-wrap break-words font-mono text-xs">
+                  {rawJson}
+                </pre>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {showTree && (
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <HugeiconsIcon
+                        icon={GitPullRequestIcon}
+                        size={14}
+                        className="text-muted-foreground"
+                      />
+                      <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                        PR Activity Tree
+                      </h3>
+                    </div>
 
-                  {repoTree.length ? (
-                    <div className="space-y-3">
-                      {repoTree.map((repo) => (
-                        <Card key={repo.name} className="gap-3 py-3">
-                          <CardContent className="space-y-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <p className="text-sm font-medium">
-                                  {repo.name}
-                                </p>
-                                <p className="text-muted-foreground text-[11px]">
-                                  {repo.prCount} current PR
-                                  {repo.prCount !== 1 ? "s" : ""}
-                                  {" · "}
-                                  {repo.commitCount} commit
-                                  {repo.commitCount !== 1 ? "s" : ""} in range
-                                </p>
+                    {repoTree.length ? (
+                      <div className="space-y-3">
+                        {repoTree.map((repo) => (
+                          <Card key={repo.name} className="gap-3 py-3">
+                            <CardContent className="space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <p className="text-sm font-medium">
+                                    {repo.name}
+                                  </p>
+                                  <p className="text-muted-foreground text-[11px]">
+                                    {repo.prCount} current PR
+                                    {repo.prCount !== 1 ? "s" : ""}
+                                    {" · "}
+                                    {repo.commitCount} commit
+                                    {repo.commitCount !== 1 ? "s" : ""} in range
+                                  </p>
+                                </div>
                               </div>
-                            </div>
 
-                            {repo.prs.length ? (
-                              <div className="space-y-3">
-                                {repo.prs.map((pr) => (
-                                  <PRTreeCard
-                                    key={pr.id}
-                                    pr={pr}
-                                    detailState={
-                                      prDetails[pr.id]?.status ?? "loading"
-                                    }
-                                    detailMessage={prDetails[pr.id]?.message}
-                                    showPRs={showPRs}
-                                    showCommits={showCommits}
-                                  />
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="text-muted-foreground text-xs">
-                                No current pull requests in this repo.
+                              {repo.prs.length ? (
+                                <div className="space-y-3">
+                                  {repo.prs.map((pr) => (
+                                    <PRTreeCard
+                                      key={pr.id}
+                                      pr={pr}
+                                      detailState={
+                                        prDetails[pr.id]?.status ?? "loading"
+                                      }
+                                      detailMessage={prDetails[pr.id]?.message}
+                                      showPRs={showPRs}
+                                      showCommits={showCommits}
+                                    />
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-muted-foreground text-xs">
+                                  No current pull requests in this repo.
+                                </p>
+                              )}
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="border-border text-muted-foreground rounded-md border border-dashed px-4 py-6 text-sm">
+                        No active repositories matched this recap window.
+                      </p>
+                    )}
+                  </section>
+                )}
+
+                {showReviews && (
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <HugeiconsIcon
+                        icon={EyeIcon}
+                        size={14}
+                        className="text-muted-foreground"
+                      />
+                      <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                        Reviews
+                      </h3>
+                    </div>
+
+                    {visibleReviews.length ? (
+                      <div className="space-y-2">
+                        {visibleReviews.map((review) => (
+                          <a
+                            key={review.id}
+                            href={review.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="border-border hover:bg-secondary/50 flex items-center gap-3 rounded-md border px-3 py-2 transition-colors"
+                          >
+                            <HugeiconsIcon
+                              icon={EyeIcon}
+                              size={14}
+                              className="shrink-0 text-amber-600"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium">
+                                {review.title}
                               </p>
+                              <p className="text-muted-foreground text-[11px]">
+                                {review.repoName} ·{" "}
+                                {timeAgo(review.updatedAt ?? review.createdAt)}
+                              </p>
+                            </div>
+                            {review.state && (
+                              <ActivityBadge variant={review.state} />
                             )}
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="border-border text-muted-foreground rounded-md border border-dashed px-4 py-6 text-sm">
-                      No active repositories matched this recap window.
-                    </p>
-                  )}
-                </section>
-              )}
-
-              {showReviews && (
-                <section className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <HugeiconsIcon
-                      icon={EyeIcon}
-                      size={14}
-                      className="text-muted-foreground"
-                    />
-                    <h3 className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
-                      Reviews
-                    </h3>
-                  </div>
-
-                  {visibleReviews.length ? (
-                    <div className="space-y-2">
-                      {visibleReviews.map((review) => (
-                        <a
-                          key={review.id}
-                          href={review.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="border-border hover:bg-secondary/50 flex items-center gap-3 rounded-md border px-3 py-2 transition-colors"
-                        >
-                          <HugeiconsIcon
-                            icon={EyeIcon}
-                            size={14}
-                            className="shrink-0 text-amber-600"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-xs font-medium">
-                              {review.title}
-                            </p>
-                            <p className="text-muted-foreground text-[11px]">
-                              {review.repoName} ·{" "}
-                              {timeAgo(review.updatedAt ?? review.createdAt)}
-                            </p>
-                          </div>
-                          {review.state && (
-                            <ActivityBadge variant={review.state} />
-                          )}
-                        </a>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="border-border text-muted-foreground rounded-md border border-dashed px-4 py-6 text-sm">
-                      No reviews in the selected timeframe.
-                    </p>
-                  )}
-                </section>
-              )}
-            </div>
+                          </a>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="border-border text-muted-foreground rounded-md border border-dashed px-4 py-6 text-sm">
+                        No reviews in the selected timeframe.
+                      </p>
+                    )}
+                  </section>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <p className="text-muted-foreground py-8 text-center text-sm">
