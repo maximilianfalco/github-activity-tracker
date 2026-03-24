@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   SparklesIcon,
@@ -10,6 +10,7 @@ import {
   GitPullRequestIcon,
   GitCommitIcon,
   EyeIcon,
+  RefreshIcon,
 } from "@hugeicons/core-free-icons";
 import { api, type RouterOutputs } from "~/trpc/react";
 import { usePollInterval } from "~/hooks/use-poll-interval";
@@ -43,6 +44,7 @@ type CommitItem = PRTreeItem["commits"][number];
 
 type PRDetailState = {
   status: "loading" | "ready" | "error";
+  ciStatus: PRTreeItem["ciStatus"];
   reviewStatus: PRTreeItem["reviewStatus"];
   commits: CommitItem[];
   message?: string;
@@ -52,6 +54,7 @@ type RecapStreamChunk =
   | {
       type: "pr_detail";
       prId: string;
+      ciStatus: PRTreeItem["ciStatus"];
       reviewStatus: PRTreeItem["reviewStatus"];
       commits: CommitItem[];
     }
@@ -64,6 +67,19 @@ type RecapStreamChunk =
       type: "done";
     };
 
+type RecapWindowOption =
+  | {
+      value: "today";
+      label: "Today";
+    }
+  | {
+      value: `${number}h`;
+      label: string;
+      hours: number;
+    };
+
+type RecapSummaryCache = Record<string, string>;
+
 function mergeRepoTree(
   repoTree: RepoTreeItem[],
   prDetails: Record<string, PRDetailState>,
@@ -73,6 +89,7 @@ function mergeRepoTree(
       const detail = prDetails[pr.id];
       return {
         ...pr,
+        ciStatus: detail?.ciStatus ?? pr.ciStatus,
         reviewStatus: detail?.reviewStatus ?? pr.reviewStatus,
         commits: detail?.status === "ready" ? detail.commits : pr.commits,
       };
@@ -107,7 +124,7 @@ function formatRepoTreeForAI(
     for (const pr of repo.prs) {
       const prLabel = options.includePRs ? "PR" : "PR context";
       lines.push(
-        `- ${prLabel} #${pr.number}: "${pr.title}" [${pr.state}; review: ${pr.reviewStatus ?? "unknown"}] ${pr.url} (updated ${timeAgo(pr.updatedAt)})`,
+        `- ${prLabel} #${pr.number}: "${pr.title}" [${pr.state}; ${pr.ageLabel}; ci: ${pr.ciStatus ?? "unknown"}; review: ${pr.reviewStatus ?? "unknown"}] ${pr.url} (updated ${timeAgo(pr.updatedAt)})`,
       );
 
       if (!options.includeCommits) continue;
@@ -145,9 +162,67 @@ function formatReviewsForAI(reviews: ReviewItem[]): string {
 }
 
 const HOUR_OPTIONS = [24, 36, 48, 60, 72] as const;
+const RECAP_WINDOW_OPTIONS: RecapWindowOption[] = [
+  { value: "today", label: "Today" },
+  ...HOUR_OPTIONS.map((hours) => ({
+    value: `${hours}h` as const,
+    label: `${hours}h`,
+    hours,
+  })),
+];
+
+function getTodayCutoffIso(now = new Date()): string {
+  const cutoff = new Date(now);
+  cutoff.setHours(6, 0, 0, 0);
+  return cutoff.toISOString();
+}
+
+function hashString(value: string): string {
+  let hash = 5381;
+
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 33) ^ value.charCodeAt(i);
+  }
+
+  return (hash >>> 0).toString(36);
+}
+
+function readSummaryCache(storageKey: string): RecapSummaryCache {
+  const raw = localStorage.getItem(storageKey);
+  if (!raw) return {};
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[0] === "string" && typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeSummaryCache(
+  storageKey: string,
+  updater: (cache: RecapSummaryCache) => RecapSummaryCache,
+) {
+  const nextCache = updater(readSummaryCache(storageKey));
+
+  if (Object.keys(nextCache).length === 0) {
+    localStorage.removeItem(storageKey);
+    return;
+  }
+
+  localStorage.setItem(storageKey, JSON.stringify(nextCache));
+}
 
 export default function RecapPage() {
-  const [hours, setHours] = useState(24);
+  const [selectedWindow, setSelectedWindow] =
+    useState<RecapWindowOption["value"]>("today");
   const [includedTypes, setIncludedTypes] = useState(
     () => new Set(["commit", "pr", "review"]),
   );
@@ -155,34 +230,90 @@ export default function RecapPage() {
   const [isHydratingDetails, setIsHydratingDetails] = useState(false);
 
   const poll = usePollInterval();
-  const recap = api.github.getRecap.useQuery(
-    { hours },
-    { refetchInterval: poll },
+  const selectedOption =
+    RECAP_WINDOW_OPTIONS.find((option) => option.value === selectedWindow) ??
+    RECAP_WINDOW_OPTIONS[1]!;
+  const cutoffIso =
+    selectedOption.value === "today" ? getTodayCutoffIso() : undefined;
+  const hours = "hours" in selectedOption ? selectedOption.hours : 24;
+  const recapInput = useMemo(
+    () =>
+      selectedOption.value === "today"
+        ? { cutoffIso }
+        : { hours: selectedOption.hours },
+    [cutoffIso, selectedOption],
   );
+  const windowLabel =
+    selectedOption.value === "today"
+      ? "since 6am local time"
+      : `last ${hours} hours`;
+  const recap = api.github.getRecap.useQuery(recapInput, {
+    refetchInterval: poll,
+  });
 
   const showPRs = includedTypes.has("pr");
   const showCommits = includedTypes.has("commit");
   const showReviews = includedTypes.has("review");
   const showTree = showPRs || showCommits;
 
-  const repoTreeShell = recap.data?.repoTree ?? [];
-  const repoTree = mergeRepoTree(repoTreeShell, prDetails);
-  const visibleReviews = showReviews ? (recap.data?.reviews ?? []) : [];
-  const streamPrs = repoTreeShell.flatMap((repo) =>
-    repo.prs.map((pr) => ({
-      id: pr.id,
-      repoName: pr.repoName,
-      number: pr.number,
-      updatedAt: pr.updatedAt,
-    })),
+  const repoTreeShell = useMemo(() => recap.data?.repoTree ?? [], [recap.data]);
+  const visibleReviews = useMemo(
+    () => (showReviews ? (recap.data?.reviews ?? []) : []),
+    [showReviews, recap.data],
   );
-  const streamKey = [
-    hours,
-    ...streamPrs.map((pr) => `${pr.id}:${pr.updatedAt.toISOString()}`),
-  ].join("|");
+  const repoTree = mergeRepoTree(repoTreeShell, prDetails);
+  const streamPrs = useMemo(
+    () =>
+      repoTreeShell.flatMap((repo) =>
+        repo.prs.map((pr) => ({
+          id: pr.id,
+          repoName: pr.repoName,
+          number: pr.number,
+          updatedAt: pr.updatedAt,
+        })),
+      ),
+    [repoTreeShell],
+  );
+  const streamInitialDetails = useMemo(
+    () =>
+      Object.fromEntries(
+        streamPrs.map((pr) => [
+          pr.id,
+          {
+            status: "loading" as const,
+            ciStatus: null,
+            reviewStatus: null,
+            commits: [],
+          },
+        ]),
+      ),
+    [streamPrs],
+  );
+  const streamRequestBody = useMemo(
+    () =>
+      JSON.stringify({
+        ...recapInput,
+        prs: streamPrs.map(({ id, repoName, number }) => ({
+          id,
+          repoName,
+          number,
+        })),
+      }),
+    [recapInput, streamPrs],
+  );
+  const streamPrCount = streamPrs.length;
+  const streamKey = useMemo(
+    () =>
+      [
+        selectedWindow,
+        cutoffIso ?? hours,
+        ...streamPrs.map((pr) => `${pr.id}:${pr.updatedAt.toISOString()}`),
+      ].join("|"),
+    [cutoffIso, hours, selectedWindow, streamPrs],
+  );
 
   useEffect(() => {
-    if (streamPrs.length === 0) {
+    if (streamPrCount === 0) {
       setPrDetails({});
       setIsHydratingDetails(false);
       return;
@@ -190,18 +321,7 @@ export default function RecapPage() {
 
     const controller = new AbortController();
 
-    setPrDetails(
-      Object.fromEntries(
-        streamPrs.map((pr) => [
-          pr.id,
-          {
-            status: "loading" as const,
-            reviewStatus: null,
-            commits: [],
-          },
-        ]),
-      ),
-    );
+    setPrDetails(streamInitialDetails);
     setIsHydratingDetails(true);
 
     void (async () => {
@@ -209,14 +329,7 @@ export default function RecapPage() {
         const res = await fetch("/api/recap-tree-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            hours,
-            prs: streamPrs.map(({ id, repoName, number }) => ({
-              id,
-              repoName,
-              number,
-            })),
-          }),
+          body: streamRequestBody,
           signal: controller.signal,
         });
 
@@ -245,6 +358,7 @@ export default function RecapPage() {
                 ...prev,
                 [chunk.prId]: {
                   status: "ready",
+                  ciStatus: chunk.ciStatus,
                   reviewStatus: chunk.reviewStatus,
                   commits: chunk.commits.map((commit) => ({
                     ...commit,
@@ -260,6 +374,7 @@ export default function RecapPage() {
                 ...prev,
                 [chunk.prId]: {
                   status: "error",
+                  ciStatus: null,
                   reviewStatus: null,
                   commits: [],
                   message: chunk.message,
@@ -286,6 +401,7 @@ export default function RecapPage() {
                 ? detail
                 : {
                     status: "error" as const,
+                    ciStatus: null,
                     reviewStatus: null,
                     commits: [],
                     message:
@@ -301,7 +417,7 @@ export default function RecapPage() {
     })();
 
     return () => controller.abort();
-  }, [hours, streamKey]);
+  }, [streamInitialDetails, streamKey, streamPrCount, streamRequestBody]);
 
   const treeItemCount = repoTree.reduce((sum, repo) => {
     const prCount = showPRs ? repo.prs.length : 0;
@@ -320,32 +436,16 @@ export default function RecapPage() {
     reviews: visibleReviews,
   };
 
-  const STORAGE_KEY = "recap-summary";
+  const STORAGE_KEY = "recap-summary-cache-v1";
   const [completion, setCompletion] = useState("");
-
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) setCompletion(saved);
-  }, []);
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  function updateCompletion(text: string) {
-    setCompletion(text);
-    if (text) {
-      localStorage.setItem(STORAGE_KEY, text);
-    } else {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  }
-
   const settings = api.settings.get.useQuery();
-
-  async function handleGenerate() {
-    if (!hasSelectedActivity || isHydratingDetails) return;
-    setIsGenerating(true);
-    updateCompletion("");
-
+  const selectedTypes = useMemo(
+    () => [...includedTypes].toSorted(),
+    [includedTypes],
+  );
+  const recapActivities = useMemo(() => {
     const sections: string[] = [];
+
     if (showTree) {
       sections.push(
         formatRepoTreeForAI(repoTree, {
@@ -358,11 +458,69 @@ export default function RecapPage() {
       sections.push(formatReviewsForAI(visibleReviews));
     }
 
+    return sections.filter(Boolean).join("\n\n");
+  }, [repoTree, showCommits, showPRs, showReviews, showTree, visibleReviews]);
+  const recapCacheKey = useMemo(() => {
+    const cacheInput = JSON.stringify({
+      window: selectedWindow,
+      cutoffIso: cutoffIso ?? null,
+      hours,
+      includedTypes: selectedTypes,
+      includedRepos: recap.data?.includedRepos ?? [],
+      customRule: settings.data?.recapCustomRule ?? "",
+      activities: recapActivities,
+    });
+
+    return hashString(cacheInput);
+  }, [
+    cutoffIso,
+    hours,
+    recap.data?.includedRepos,
+    recapActivities,
+    selectedTypes,
+    selectedWindow,
+    settings.data?.recapCustomRule,
+  ]);
+
+  useEffect(() => {
+    const saved = readSummaryCache(STORAGE_KEY)[recapCacheKey] ?? "";
+    setCompletion(saved);
+  }, [STORAGE_KEY, recapCacheKey]);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  function updateCompletion(text: string, cacheKey = recapCacheKey) {
+    setCompletion(text);
+    writeSummaryCache(STORAGE_KEY, (cache) => {
+      if (!text) {
+        const { [cacheKey]: removedValue, ...rest } = cache;
+        void removedValue;
+        return rest;
+      }
+
+      return {
+        ...cache,
+        [cacheKey]: text,
+      };
+    });
+  }
+
+  async function handleGenerate() {
+    if (!hasSelectedActivity || isHydratingDetails || !recapActivities) return;
+
+    const cachedSummary = readSummaryCache(STORAGE_KEY)[recapCacheKey];
+    if (cachedSummary) {
+      setCompletion(cachedSummary);
+      return;
+    }
+
+    setIsGenerating(true);
+    setCompletion("");
+
     const res = await fetch("/api/recap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        activities: sections.filter(Boolean).join("\n\n"),
+        activities: recapActivities,
         customRule: settings.data?.recapCustomRule ?? undefined,
       }),
     });
@@ -383,7 +541,7 @@ export default function RecapPage() {
       setCompletion(text);
     }
 
-    localStorage.setItem(STORAGE_KEY, text);
+    updateCompletion(text);
     setIsGenerating(false);
   }
 
@@ -393,13 +551,15 @@ export default function RecapPage() {
       <div className="p-6">
         <div className="mb-4 flex items-center gap-2">
           <select
-            value={hours}
-            onChange={(e) => setHours(Number(e.target.value))}
+            value={selectedWindow}
+            onChange={(e) =>
+              setSelectedWindow(e.target.value as RecapWindowOption["value"])
+            }
             className="border-border bg-background h-6 rounded-md border px-2 text-xs"
           >
-            {HOUR_OPTIONS.map((h) => (
-              <option key={h} value={h}>
-                {h}h
+            {RECAP_WINDOW_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
@@ -445,9 +605,7 @@ export default function RecapPage() {
                   0,
                 )}
                 sub={
-                  isHydratingDetails
-                    ? "fetching PR details..."
-                    : `last ${hours} hours`
+                  isHydratingDetails ? "fetching PR details..." : windowLabel
                 }
               />
               <MetricCard
@@ -458,7 +616,7 @@ export default function RecapPage() {
               <MetricCard
                 label="Reviews"
                 value={recap.data?.reviewCount ?? 0}
-                sub={`last ${hours} hours`}
+                sub={windowLabel}
               />
             </>
           )}
@@ -508,7 +666,7 @@ export default function RecapPage() {
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement("a");
                         a.href = url;
-                        a.download = `recap-${hours}h-${new Date().toISOString().slice(0, 10)}.json`;
+                        a.download = `recap-${selectedWindow}-${new Date().toISOString().slice(0, 10)}.json`;
                         a.click();
                         URL.revokeObjectURL(url);
                       }}
@@ -628,11 +786,7 @@ export default function RecapPage() {
                             </p>
                           </div>
                           {review.state && (
-                            <ActivityBadge
-                              variant={
-                                review.state as "open" | "merged" | "closed"
-                              }
-                            />
+                            <ActivityBadge variant={review.state} />
                           )}
                         </a>
                       ))}
@@ -648,7 +802,7 @@ export default function RecapPage() {
           </>
         ) : (
           <p className="text-muted-foreground py-8 text-center text-sm">
-            No activity in the last {hours} hours for the selected filters
+            No activity {windowLabel} for the selected filters
           </p>
         )}
 
@@ -713,6 +867,8 @@ function PRTreeCard({
           {showPRs ? pr.title : `PR #${pr.number}: ${pr.title}`}
         </a>
         {showPRs && <ActivityBadge variant={pr.state} />}
+        {showPRs && <ActivityBadge variant={pr.ageLabel} />}
+        {showPRs && pr.ciStatus && <ActivityBadge variant={pr.ciStatus} />}
         {showPRs && pr.reviewStatus && (
           <ActivityBadge variant={pr.reviewStatus} />
         )}
@@ -724,9 +880,14 @@ function PRTreeCard({
       {showCommits && (
         <div className="border-border/70 border-t px-1 py-3">
           {detailState === "loading" ? (
-            <p className="text-muted-foreground px-3 text-[11px]">
-              Fetching commits...
-            </p>
+            <div className="text-muted-foreground flex items-center gap-2 px-3 text-[11px]">
+              <HugeiconsIcon
+                icon={RefreshIcon}
+                size={12}
+                className="animate-spin"
+              />
+              <p>Fetching commits...</p>
+            </div>
           ) : detailState === "error" ? (
             <p className="text-muted-foreground px-3 text-[11px]">
               {detailMessage ?? "Failed to fetch commits for this PR."}

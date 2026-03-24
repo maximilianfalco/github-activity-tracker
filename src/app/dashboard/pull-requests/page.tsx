@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { api } from "~/trpc/react";
+import { api, type RouterOutputs } from "~/trpc/react";
 import { usePollInterval } from "~/hooks/use-poll-interval";
 import { Topbar } from "~/components/dashboard/topbar";
 import { FilterChips } from "~/components/dashboard/filter-chips";
@@ -27,6 +27,99 @@ const dateOptions = [
   { label: "90 days", value: "90d" as const },
 ];
 
+type PullRequestListItem = RouterOutputs["github"]["getPullRequests"][number];
+
+function extractPullRequestNumber(url: string): number | undefined {
+  const match = /\/pull\/(\d+)(?:\/|$)/.exec(url);
+  const value = match?.[1];
+  return value ? Number(value) : undefined;
+}
+
+const PullRequestCIBadge = memo(function PullRequestCIBadge({
+  repoName,
+  prNumber,
+  initialStatus,
+  poll,
+}: {
+  repoName: string;
+  prNumber: number | undefined;
+  initialStatus:
+    | "ci_passing"
+    | "ci_failing"
+    | "ci_pending"
+    | "ci_unknown"
+    | undefined;
+  poll: number | false;
+}) {
+  const ciStatus = api.github.getPullRequestCIStatus.useQuery(
+    {
+      repoName,
+      prNumber: prNumber ?? 1,
+    },
+    {
+      enabled: prNumber !== undefined,
+      initialData: initialStatus ?? "ci_unknown",
+      refetchInterval: poll,
+    },
+  );
+
+  return <ActivityBadge variant={ciStatus.data ?? "ci_unknown"} />;
+});
+
+const PullRequestRow = memo(function PullRequestRow({
+  pr,
+  size,
+  start,
+  poll,
+}: {
+  pr: PullRequestListItem;
+  size: number;
+  start: number;
+  poll: number | false;
+}) {
+  return (
+    <a
+      key={pr.id}
+      href={pr.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="border-border hover:bg-secondary/50 absolute top-0 left-0 flex w-full items-center gap-2.5 border-b px-1 transition-colors"
+      style={{
+        height: `${size}px`,
+        transform: `translateY(${start}px)`,
+      }}
+    >
+      <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" />
+      <span className="min-w-0 flex-1 truncate text-xs">{pr.title}</span>
+      {pr.state && (
+        <ActivityBadge variant={pr.state as "open" | "merged" | "closed"} />
+      )}
+      {pr.ageLabel && (
+        <ActivityBadge variant={pr.ageLabel as "new" | "existing"} />
+      )}
+      <PullRequestCIBadge
+        repoName={pr.repoName}
+        prNumber={extractPullRequestNumber(pr.url)}
+        initialStatus={pr.ciStatus}
+        poll={poll}
+      />
+      {pr.reviewStatus && (
+        <ActivityBadge
+          variant={
+            pr.reviewStatus as
+              | "approved"
+              | "changes_requested"
+              | "review_pending"
+          }
+        />
+      )}
+      <span className="text-muted-foreground shrink-0 text-[11px]">
+        {pr.repoName} · {timeAgo(pr.createdAt)}
+      </span>
+    </a>
+  );
+});
+
 export default function PullRequestsPage() {
   const [stateFilter, setStateFilter] = useState<
     "all" | "open" | "merged" | "closed"
@@ -35,10 +128,13 @@ export default function PullRequestsPage() {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const poll = usePollInterval();
-  const prs = api.github.getPullRequests.useQuery({
-    state: stateFilter === "all" ? undefined : stateFilter,
-    dateRange,
-  }, { refetchInterval: poll });
+  const prs = api.github.getPullRequests.useQuery(
+    {
+      state: stateFilter === "all" ? undefined : stateFilter,
+      dateRange,
+    },
+    {},
+  );
 
   const virtualizer = useVirtualizer({
     count: prs.data?.length ?? 0,
@@ -65,7 +161,7 @@ export default function PullRequestsPage() {
             />
           </div>
           {prs.data?.length ? (
-            <span className="shrink-0 text-xs text-muted-foreground">
+            <span className="text-muted-foreground shrink-0 text-xs">
               {prs.data.length} pull requests
             </span>
           ) : null}
@@ -75,55 +171,25 @@ export default function PullRequestsPage() {
           <ActivityFeedSkeleton rows={8} />
         ) : prs.data?.length ? (
           <>
-            <div
-              ref={parentRef}
-            className="min-h-0 flex-1 overflow-y-auto"
-          >
-            <div
-              className="relative w-full"
-              style={{ height: `${virtualizer.getTotalSize()}px` }}
-            >
-              {virtualizer.getVirtualItems().map((virtualRow) => {
-                const pr = prs.data[virtualRow.index]!;
-                return (
-                  <a
-                    key={pr.id}
-                    href={pr.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="border-border hover:bg-secondary/50 absolute top-0 left-0 flex w-full items-center gap-2.5 border-b px-1 transition-colors"
-                    style={{
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" />
-                    <span className="min-w-0 flex-1 truncate text-xs">
-                      {pr.title}
-                    </span>
-                    {pr.state && (
-                      <ActivityBadge
-                        variant={pr.state as "open" | "merged" | "closed"}
-                      />
-                    )}
-                    {pr.reviewStatus && (
-                      <ActivityBadge
-                        variant={
-                          pr.reviewStatus as
-                            | "approved"
-                            | "changes_requested"
-                            | "review_pending"
-                        }
-                      />
-                    )}
-                    <span className="text-muted-foreground shrink-0 text-[11px]">
-                      {pr.repoName} · {timeAgo(pr.createdAt)}
-                    </span>
-                  </a>
-                );
-              })}
+            <div ref={parentRef} className="min-h-0 flex-1 overflow-y-auto">
+              <div
+                className="relative w-full"
+                style={{ height: `${virtualizer.getTotalSize()}px` }}
+              >
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const pr = prs.data[virtualRow.index]!;
+                  return (
+                    <PullRequestRow
+                      key={pr.id}
+                      pr={pr}
+                      size={virtualRow.size}
+                      start={virtualRow.start}
+                      poll={poll}
+                    />
+                  );
+                })}
+              </div>
             </div>
-          </div>
           </>
         ) : (
           <p className="text-muted-foreground py-8 text-center text-sm">
