@@ -6,10 +6,14 @@ import {
   mapSearchItemToReview,
   mapSearchCommitToCommit,
   extractRepoName,
+  derivePullRequestCIStatus,
+  deriveLatestSubmittedReviewAt,
 } from "../github";
 import { isCacheStale, CACHE_TTL_MS } from "../cache";
 import type {
   GitHubEvent,
+  GitHubCheckRun,
+  GitHubPullRequestReview,
   GitHubSearchItem,
   GitHubSearchCommitItem,
 } from "../github.types";
@@ -50,9 +54,9 @@ describe("extractRepoName", () => {
   });
 
   it("handles nested org/repo paths", () => {
-    expect(
-      extractRepoName("https://api.github.com/repos/my-org/my-repo"),
-    ).toBe("my-org/my-repo");
+    expect(extractRepoName("https://api.github.com/repos/my-org/my-repo")).toBe(
+      "my-org/my-repo",
+    );
   });
 
   it("returns input if /repos/ not found", () => {
@@ -147,6 +151,7 @@ describe("mapSearchItemToPR", () => {
   it("maps open PR correctly", () => {
     const pr = mapSearchItemToPR(baseItem);
     expect(pr).toEqual({
+      number: 42,
       title: "feat: add feature",
       repoName: "owner/repo",
       url: "https://github.com/owner/repo/pull/42",
@@ -201,6 +206,96 @@ describe("mapSearchItemToReview", () => {
   });
 });
 
+describe("deriveLatestSubmittedReviewAt", () => {
+  it("returns the latest submitted review timestamp for the given reviewer", () => {
+    const reviews: GitHubPullRequestReview[] = [
+      {
+        state: "COMMENTED",
+        submitted_at: "2024-01-10T10:00:00Z",
+        user: { login: "alice" },
+      },
+      {
+        state: "APPROVED",
+        submitted_at: "2024-01-12T15:30:00Z",
+        user: { login: "max" },
+      },
+      {
+        state: "CHANGES_REQUESTED",
+        submitted_at: "2024-01-11T09:00:00Z",
+        user: { login: "max" },
+      },
+    ];
+
+    expect(deriveLatestSubmittedReviewAt(reviews, "max")).toEqual(
+      new Date("2024-01-12T15:30:00Z"),
+    );
+  });
+
+  it("ignores pending or unrelated reviews", () => {
+    const reviews: GitHubPullRequestReview[] = [
+      {
+        state: "PENDING",
+        submitted_at: null,
+        user: { login: "max" },
+      },
+      {
+        state: "APPROVED",
+        submitted_at: "2024-01-12T15:30:00Z",
+        user: { login: "alice" },
+      },
+    ];
+
+    expect(deriveLatestSubmittedReviewAt(reviews, "max")).toBeNull();
+  });
+});
+
+describe("derivePullRequestCIStatus", () => {
+  it("returns pending when checks are still running", () => {
+    const checkRuns: GitHubCheckRun[] = [
+      { status: "queued", conclusion: null },
+      { status: "completed", conclusion: "success" },
+    ];
+
+    expect(derivePullRequestCIStatus("success", 1, checkRuns)).toBe(
+      "ci_pending",
+    );
+  });
+
+  it("returns failing when a completed check failed", () => {
+    const checkRuns: GitHubCheckRun[] = [
+      { status: "completed", conclusion: "failure" },
+    ];
+
+    expect(derivePullRequestCIStatus("success", 1, checkRuns)).toBe(
+      "ci_failing",
+    );
+  });
+
+  it("returns passing when checks succeeded", () => {
+    const checkRuns: GitHubCheckRun[] = [
+      { status: "completed", conclusion: "success" },
+    ];
+
+    expect(derivePullRequestCIStatus("success", 1, checkRuns)).toBe(
+      "ci_passing",
+    );
+  });
+
+  it("returns unknown when no signal is available", () => {
+    expect(derivePullRequestCIStatus(null, 0, [])).toBe("ci_unknown");
+  });
+
+  it("ignores empty combined pending when check runs have passed", () => {
+    const checkRuns: GitHubCheckRun[] = [
+      { status: "completed", conclusion: "success" },
+    ];
+
+    expect(derivePullRequestCIStatus("pending", 0, checkRuns)).toBe(
+      "ci_passing",
+    );
+  });
+});
+
 describe("mapSearchCommitToCommit", () => {
   const baseItem: GitHubSearchCommitItem = {
     sha: "abc123def456",
@@ -247,24 +342,24 @@ describe("isCacheStale", () => {
   it("returns false when cache is fresh (5 min old)", () => {
     const now = new Date("2024-01-15T10:05:00Z");
     const fetchedAt = new Date("2024-01-15T10:00:00Z");
-    expect(isCacheStale(fetchedAt, now)).toBe(false);
+    expect(isCacheStale(fetchedAt, undefined, now)).toBe(false);
   });
 
   it("returns true when cache exceeds TTL (20 min old)", () => {
     const now = new Date("2024-01-15T10:20:00Z");
     const fetchedAt = new Date("2024-01-15T10:00:00Z");
-    expect(isCacheStale(fetchedAt, now)).toBe(true);
+    expect(isCacheStale(fetchedAt, undefined, now)).toBe(true);
   });
 
   it("returns true at exact TTL boundary (15 min)", () => {
     const now = new Date("2024-01-15T10:15:00Z");
     const fetchedAt = new Date("2024-01-15T10:00:00Z");
-    expect(isCacheStale(fetchedAt, now)).toBe(true);
+    expect(isCacheStale(fetchedAt, undefined, now)).toBe(true);
   });
 
   it("returns false 1ms before TTL", () => {
     const fetchedAt = new Date("2024-01-15T10:00:00.000Z");
     const now = new Date(fetchedAt.getTime() + CACHE_TTL_MS - 1);
-    expect(isCacheStale(fetchedAt, now)).toBe(false);
+    expect(isCacheStale(fetchedAt, undefined, now)).toBe(false);
   });
 });
