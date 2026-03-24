@@ -17,6 +17,7 @@ import {
 import {
   GitHubRateLimitError,
   type PullRequestCIStatus,
+  type PullRequestState,
   type Review,
   type PullRequestReviewStatus,
 } from "~/server/services/github.types";
@@ -135,7 +136,7 @@ type RecapPRItem = {
   url: string;
   repoName: string;
   branch: null;
-  state: "open" | "merged" | "closed";
+  state: PullRequestState;
   ageLabel: PullRequestAgeLabel;
   ciStatus: PullRequestCIStatus | null;
   reviewStatus: PullRequestReviewStatus | null;
@@ -182,13 +183,15 @@ function buildFallbackTree(
   repoNames: string[],
   cutoff: Date,
 ): RecapRepoTreeItem[] {
-  const openPrs = items
-    .filter((item) => item.type === "pr" && item.state === "open")
+  const activePrs = items
+    .filter(
+      (item) => item.type === "pr" && ["open", "draft"].includes(item.state ?? ""),
+    )
     .filter((item) => (item.updatedAt ?? item.createdAt) >= cutoff)
     .filter((item) => repoNames.includes(item.repoName));
 
   const repoMap = new Map<string, RecapPRItem[]>();
-  for (const item of openPrs) {
+  for (const item of activePrs) {
     const prNumber = extractPullRequestNumber(item.url);
     if (!prNumber) continue;
 
@@ -201,7 +204,7 @@ function buildFallbackTree(
       url: item.url,
       repoName: item.repoName,
       branch: null,
-      state: "open",
+      state: (item.state as PullRequestState | null) ?? "open",
       ageLabel: getPullRequestAgeLabel(item.createdAt, cutoff),
       ciStatus: null,
       reviewStatus: null,
@@ -260,7 +263,7 @@ export const githubRouter = createTRPCRouter({
     .input(
       z
         .object({
-          state: z.enum(["open", "merged", "closed"]).optional(),
+          state: z.enum(["open", "draft", "merged", "closed"]).optional(),
           dateRange: dateRangeSchema,
         })
         .default({}),

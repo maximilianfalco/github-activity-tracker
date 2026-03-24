@@ -13,7 +13,6 @@ import {
   RefreshIcon,
 } from "@hugeicons/core-free-icons";
 import { api, type RouterOutputs } from "~/trpc/react";
-import { usePollInterval } from "~/hooks/use-poll-interval";
 import { Topbar } from "~/components/dashboard/topbar";
 import {
   MetricCard,
@@ -103,6 +102,10 @@ function mergeRepoTree(
   });
 }
 
+function formatTimestampForAI(date: Date): string {
+  return date.toISOString();
+}
+
 function formatRepoTreeForAI(
   repoTree: RepoTreeItem[],
   options: {
@@ -124,7 +127,7 @@ function formatRepoTreeForAI(
     for (const pr of repo.prs) {
       const prLabel = options.includePRs ? "PR" : "PR context";
       lines.push(
-        `- ${prLabel} #${pr.number}: "${pr.title}" [${pr.state}; ${pr.ageLabel}; ci: ${pr.ciStatus ?? "unknown"}; review: ${pr.reviewStatus ?? "unknown"}] ${pr.url} (updated ${timeAgo(pr.updatedAt)})`,
+        `- ${prLabel} #${pr.number}: "${pr.title}" [${pr.state}; ${pr.ageLabel}; ci: ${pr.ciStatus ?? "unknown"}; review: ${pr.reviewStatus ?? "unknown"}] ${pr.url} (updated ${formatTimestampForAI(pr.updatedAt)})`,
       );
 
       if (!options.includeCommits) continue;
@@ -137,7 +140,7 @@ function formatRepoTreeForAI(
       lines.push("  - Commits:");
       for (const commit of pr.commits) {
         lines.push(
-          `    - "${commit.title}" ${commit.url} (${timeAgo(commit.createdAt)})`,
+          `    - "${commit.title}" ${commit.url} (${formatTimestampForAI(commit.createdAt)})`,
         );
       }
     }
@@ -154,7 +157,7 @@ function formatReviewsForAI(reviews: ReviewItem[]): string {
   const lines = ["## Reviews"];
   for (const review of reviews) {
     lines.push(
-      `- ${review.repoName}: "${review.title}" [${review.state ?? "unknown"}] ${review.url} (${timeAgo(review.updatedAt ?? review.createdAt)})`,
+      `- ${review.repoName}: "${review.title}" [${review.state ?? "unknown"}] ${review.url} (${formatTimestampForAI(review.updatedAt ?? review.createdAt)})`,
     );
   }
 
@@ -228,8 +231,8 @@ export default function RecapPage() {
   );
   const [prDetails, setPrDetails] = useState<Record<string, PRDetailState>>({});
   const [isHydratingDetails, setIsHydratingDetails] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const poll = usePollInterval();
   const selectedOption =
     RECAP_WINDOW_OPTIONS.find((option) => option.value === selectedWindow) ??
     RECAP_WINDOW_OPTIONS[1]!;
@@ -247,9 +250,7 @@ export default function RecapPage() {
     selectedOption.value === "today"
       ? "since 6am local time"
       : `last ${hours} hours`;
-  const recap = api.github.getRecap.useQuery(recapInput, {
-    refetchInterval: poll,
-  });
+  const recap = api.github.getRecap.useQuery(recapInput);
 
   const showPRs = includedTypes.has("pr");
   const showCommits = includedTypes.has("commit");
@@ -488,6 +489,18 @@ export default function RecapPage() {
   }, [STORAGE_KEY, recapCacheKey]);
   const [isGenerating, setIsGenerating] = useState(false);
 
+  function showToast(message: string) {
+    setToastMessage(message);
+    window.clearTimeout((showToast as typeof showToast & { timeoutId?: number }).timeoutId);
+    (showToast as typeof showToast & { timeoutId?: number }).timeoutId =
+      window.setTimeout(() => setToastMessage(null), 2000);
+  }
+
+  async function copyToClipboard(text: string, message: string) {
+    await navigator.clipboard.writeText(text);
+    showToast(message);
+  }
+
   function updateCompletion(text: string, cacheKey = recapCacheKey) {
     setCompletion(text);
     writeSummaryCache(STORAGE_KEY, (cache) => {
@@ -651,7 +664,7 @@ export default function RecapPage() {
                     <DropdownMenuItem
                       onClick={() => {
                         const json = JSON.stringify(exportPayload, null, 2);
-                        void navigator.clipboard.writeText(json);
+                        void copyToClipboard(json, "Copied JSON to clipboard");
                       }}
                     >
                       <HugeiconsIcon icon={Copy01Icon} size={14} />
@@ -817,7 +830,12 @@ export default function RecapPage() {
                   variant="ghost"
                   size="sm"
                   className="text-muted-foreground h-6 gap-1 px-2 text-[11px]"
-                  onClick={() => void navigator.clipboard.writeText(completion)}
+                  onClick={() =>
+                    void copyToClipboard(
+                      completion,
+                      "Copied recap to clipboard",
+                    )
+                  }
                 >
                   <HugeiconsIcon icon={Copy01Icon} size={12} />
                   Copy
@@ -830,6 +848,12 @@ export default function RecapPage() {
               className="min-h-[200px] font-mono text-xs"
               placeholder="Generating summary..."
             />
+          </div>
+        )}
+
+        {toastMessage && (
+          <div className="pointer-events-none fixed right-6 bottom-6 z-50 rounded-md border border-border bg-background/95 px-3 py-2 text-xs text-foreground shadow-lg backdrop-blur-sm">
+            {toastMessage}
           </div>
         )}
       </div>

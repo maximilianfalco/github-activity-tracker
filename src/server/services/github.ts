@@ -50,16 +50,17 @@ export function mapPushEventToCommits(event: GitHubEvent): Commit[] {
 
 export function mapSearchItemToPR(item: GitHubSearchItem): PullRequest {
   const repoName = extractRepoName(item.repository_url);
-  let state: "open" | "merged" | "closed";
+  let state: PullRequest["state"];
   if (item.pull_request?.merged_at) {
     state = "merged";
+  } else if (item.state === "open" && item.draft) {
+    state = "draft";
   } else if (item.state === "open") {
     state = "open";
   } else {
     state = "closed";
   }
   return {
-    number: extractPullRequestNumber(item.html_url),
     title: item.title,
     repoName,
     url: item.html_url,
@@ -70,7 +71,21 @@ export function mapSearchItemToPR(item: GitHubSearchItem): PullRequest {
 }
 
 export function mapSearchItemToReview(item: GitHubSearchItem): Review {
-  return mapSearchItemToPR(item);
+  const repoName = extractRepoName(item.repository_url);
+  const state = item.pull_request?.merged_at
+    ? "merged"
+    : item.state === "open"
+      ? "open"
+      : "closed";
+
+  return {
+    title: item.title,
+    repoName,
+    url: item.html_url,
+    state,
+    createdAt: new Date(item.created_at),
+    updatedAt: new Date(item.updated_at),
+  };
 }
 
 export function extractPullRequestNumber(url: string): number | undefined {

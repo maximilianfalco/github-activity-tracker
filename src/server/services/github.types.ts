@@ -1,4 +1,5 @@
 export type ActivityType = "commit" | "pr" | "review";
+export type PullRequestState = "open" | "draft" | "merged" | "closed";
 export type PullRequestReviewStatus =
   | "approved"
   | "changes_requested"
@@ -23,7 +24,7 @@ export interface PullRequest {
   title: string;
   repoName: string;
   url: string;
-  state: "open" | "merged" | "closed";
+  state: PullRequestState;
   reviewStatus?: PullRequestReviewStatus;
   ciStatus?: PullRequestCIStatus;
   createdAt: Date;
@@ -75,6 +76,7 @@ export interface GitHubSearchItem {
   title: string;
   html_url: string;
   state: string;
+  draft?: boolean;
   created_at: string;
   updated_at: string;
   repository_url: string;

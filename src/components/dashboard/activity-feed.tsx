@@ -85,7 +85,7 @@ export function ActivityFeed({ items }: { items: ActivityItem[] }) {
               </span>
               {item.state && (
                 <ActivityBadge
-                  variant={item.state as "open" | "merged" | "closed"}
+                  variant={item.state as "open" | "draft" | "merged" | "closed"}
                 />
               )}
               <span className="shrink-0 text-[11px] text-muted-foreground">

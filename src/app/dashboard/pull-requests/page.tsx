@@ -16,6 +16,7 @@ import {
 const stateOptions = [
   { label: "All", value: "all" as const },
   { label: "Open", value: "open" as const },
+  { label: "Draft", value: "draft" as const },
   { label: "Merged", value: "merged" as const },
   { label: "Closed", value: "closed" as const },
 ];
@@ -92,7 +93,9 @@ const PullRequestRow = memo(function PullRequestRow({
       <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" />
       <span className="min-w-0 flex-1 truncate text-xs">{pr.title}</span>
       {pr.state && (
-        <ActivityBadge variant={pr.state as "open" | "merged" | "closed"} />
+        <ActivityBadge
+          variant={pr.state as "open" | "draft" | "merged" | "closed"}
+        />
       )}
       {pr.ageLabel && (
         <ActivityBadge variant={pr.ageLabel as "new" | "existing"} />
@@ -122,7 +125,7 @@ const PullRequestRow = memo(function PullRequestRow({
 
 export default function PullRequestsPage() {
   const [stateFilter, setStateFilter] = useState<
-    "all" | "open" | "merged" | "closed"
+    "all" | "open" | "draft" | "merged" | "closed"
   >("all");
   const [dateRange, setDateRange] = useState<"1d" | "7d" | "30d" | "90d">("7d");
   const parentRef = useRef<HTMLDivElement>(null);
