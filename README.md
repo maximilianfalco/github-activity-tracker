@@ -23,6 +23,8 @@
 
 GitHub UI kinda sucks and I got tired to needing to comb through branches and repos and PRs just to give a daily update to my team. Hopefully this dashboard improves it!
 
+The app now also has a desktop shell mode powered by Electron so it can grow into a local agent workspace with a real terminal, not just a browser dashboard.
+
 ## What it does
 
 Sign in with GitHub and you get a dashboard showing everything you've been up to:
@@ -75,6 +77,25 @@ make setup
 ```
 
 Then open [localhost:4731](http://localhost:4731) and sign in with GitHub.
+
+## Desktop Mode
+
+If you want to run the app as a desktop shell instead of in a browser tab:
+
+```bash
+pnpm desktop:dev
+```
+
+That starts the Next.js dev server and opens the app in Electron.
+
+For a production-style desktop launch, build the app first and then start the desktop runtime:
+
+```bash
+pnpm build
+pnpm desktop:start
+```
+
+Right now the Electron shell wraps the existing dashboard so the app can evolve toward native desktop features like an embedded PTY-backed agent terminal.
 
 When `ghat` loads configuration, it uses this precedence:
 
@@ -211,6 +232,8 @@ src/
 | Command | What it does |
 |---|---|
 | `pnpm dev` | Dev server on port 4731 |
+| `pnpm desktop:dev` | Launch the Electron desktop shell against the local dev server |
+| `pnpm desktop:start` | Launch the Electron desktop shell against the production Next build |
 | `pnpm build` | Production build |
 | `pnpm check` | Lint + typecheck |
 | `pnpm test` | Run tests |

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "@xterm/xterm/css/xterm.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -134,5 +135,111 @@
   [role="button"],
   a {
     cursor: pointer;
+  }
+}
+
+@layer components {
+  .reviews-terminal .xterm {
+    height: 100%;
+  }
+
+  .reviews-terminal .xterm-viewport {
+    scrollbar-width: thin;
+  }
+}
+
+@layer components {
+  .gh-markdown {
+    @apply min-w-0 max-w-full text-xs leading-6 break-words text-foreground;
+  }
+
+  .gh-markdown > * + * {
+    @apply mt-3;
+  }
+
+  .gh-markdown h1,
+  .gh-markdown h2,
+  .gh-markdown h3,
+  .gh-markdown h4 {
+    @apply mt-5 scroll-m-20 font-semibold tracking-tight text-foreground;
+  }
+
+  .gh-markdown h1 {
+    @apply text-lg;
+  }
+
+  .gh-markdown h2 {
+    @apply text-base;
+  }
+
+  .gh-markdown h3,
+  .gh-markdown h4 {
+    @apply text-sm;
+  }
+
+  .gh-markdown p,
+  .gh-markdown li {
+    @apply text-xs leading-6 whitespace-pre-wrap break-words;
+  }
+
+  .gh-markdown a {
+    @apply break-all text-primary underline underline-offset-4;
+  }
+
+  .gh-markdown strong {
+    @apply font-semibold text-foreground;
+  }
+
+  .gh-markdown em {
+    @apply italic;
+  }
+
+  .gh-markdown ul {
+    @apply list-disc pl-5;
+  }
+
+  .gh-markdown ol {
+    @apply list-decimal pl-5;
+  }
+
+  .gh-markdown li + li {
+    @apply mt-1;
+  }
+
+  .gh-markdown blockquote {
+    @apply border-l-3 border-border pl-4 text-muted-foreground;
+  }
+
+  .gh-markdown hr {
+    @apply my-4 border-border;
+  }
+
+  .gh-markdown code {
+    @apply max-w-full break-words rounded bg-muted px-1.5 py-0.5 font-mono text-[11px];
+  }
+
+  .gh-markdown pre {
+    @apply max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background px-3 py-2;
+  }
+
+  .gh-markdown pre code {
+    @apply whitespace-pre-wrap break-words bg-transparent p-0 text-[11px];
+  }
+
+  .gh-markdown table {
+    @apply block max-w-full overflow-x-auto rounded-md border border-border;
+  }
+
+  .gh-markdown thead {
+    @apply bg-muted/70;
+  }
+
+  .gh-markdown tr {
+    @apply border-b border-border last:border-b-0;
+  }
+
+  .gh-markdown th,
+  .gh-markdown td {
+    @apply px-3 py-2 text-left align-top text-xs break-words;
   }
 }
