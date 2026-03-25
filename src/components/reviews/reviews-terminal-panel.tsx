@@ -6,6 +6,12 @@ import { Terminal } from "@xterm/xterm";
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 
+type DesktopReviewsTerminal = NonNullable<
+  NonNullable<Window["ghatDesktop"]>["reviewsTerminal"]
+>;
+
+const noop = () => undefined;
+
 const TERMINAL_THEME = {
   background: "#0b1020",
   foreground: "#e4ecff",
@@ -33,15 +39,9 @@ const TERMINAL_THEME = {
 function writeBootText(term: Terminal) {
   term.writeln("\u001b[1;34mGitHub Activity Tracker\u001b[0m reviews terminal");
   term.writeln("");
-  term.writeln("\u001b[32m>\u001b[0m xterm.js panel is mounted.");
-  term.writeln(
-    "\u001b[33m>\u001b[0m PTY wiring is the next step once Electron is connected to node-pty.",
-  );
-  term.writeln(
-    "\u001b[36m>\u001b[0m Keep this open while triaging pull request conversations and review context.",
-  );
+  term.writeln("\u001b[32m>\u001b[0m Opening local desktop shell...");
+  term.writeln("\u001b[36m>\u001b[0m This session runs inside the Electron app.");
   term.writeln("");
-  term.write("$ ");
 }
 
 export function ReviewsTerminalPanel({
@@ -53,66 +53,18 @@ export function ReviewsTerminalPanel({
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const inputBufferRef = useRef("");
   const fitAddonRef = useRef<FitAddon | null>(null);
-
-  const writePrompt = useCallback((terminal: Terminal) => {
-    terminal.write("\r\n$ ");
-  }, []);
-
-  const runCommand = useCallback(
-    (terminal: Terminal, rawCommand: string) => {
-      const command = rawCommand.trim();
-
-      if (!command) {
-        writePrompt(terminal);
-        return;
-      }
-
-      if (command === "clear") {
-        terminal.clear();
-        writeBootText(terminal);
-        return;
-      }
-
-      if (command === "help") {
-        terminal.writeln("");
-        terminal.writeln("Available for now: help, clear, status, review-context");
-        writePrompt(terminal);
-        return;
-      }
-
-      if (command === "status") {
-        terminal.writeln("");
-        terminal.writeln("UI terminal is active.");
-        terminal.writeln("Electron PTY bridge is not connected yet.");
-        writePrompt(terminal);
-        return;
-      }
-
-      if (command === "review-context") {
-        terminal.writeln("");
-        terminal.writeln("Use this panel beside the expanded PR details and conversations.");
-        terminal.writeln("Next step: wire commands through Electron main with node-pty.");
-        writePrompt(terminal);
-        return;
-      }
-
-      terminal.writeln("");
-      terminal.writeln(`Command not connected yet: ${command}`);
-      terminal.writeln("Try `help` while the PTY backend is still pending.");
-      writePrompt(terminal);
-    },
-    [writePrompt],
-  );
+  const desktopApiRef = useRef<DesktopReviewsTerminal | null>(null);
 
   const resetTerminal = useCallback(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    inputBufferRef.current = "";
     terminal.clear();
-    writeBootText(terminal);
     terminal.focus();
+    const desktopApi = desktopApiRef.current;
+    if (desktopApi) {
+      void desktopApi.restart();
+    }
   }, []);
 
   useEffect(() => {
@@ -135,49 +87,16 @@ export function ReviewsTerminalPanel({
     terminal.open(mountNode);
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
-    inputBufferRef.current = "";
     writeBootText(terminal);
     terminal.focus();
-
-    const dataListener = terminal.onData((input) => {
-      if (input === "\r") {
-        const command = inputBufferRef.current;
-        inputBufferRef.current = "";
-        runCommand(terminal, command);
-        return;
-      }
-
-      if (input === "\u007F") {
-        if (inputBufferRef.current.length === 0) return;
-        inputBufferRef.current = inputBufferRef.current.slice(0, -1);
-        terminal.write("\b \b");
-        return;
-      }
-
-      if (input === "\u0003") {
-        inputBufferRef.current = "";
-        terminal.write("^C");
-        writePrompt(terminal);
-        return;
-      }
-
-      if (input === "\u000c") {
-        inputBufferRef.current = "";
-        terminal.clear();
-        writeBootText(terminal);
-        terminal.focus();
-        return;
-      }
-
-      if (input >= " " && input !== "\u007f") {
-        inputBufferRef.current += input;
-        terminal.write(input);
-      }
-    });
 
     const fit = () => {
       if (mountNode.clientWidth === 0 || mountNode.clientHeight === 0) return;
       fitAddon.fit();
+      const desktopApi = desktopApiRef.current;
+      if (desktopApi) {
+        void desktopApi.resize(terminal.cols, terminal.rows);
+      }
     };
     const focusTerminal = () => terminal.focus();
     const initialFitFrames = [30, 120, 260].map((delay) =>
@@ -188,6 +107,58 @@ export function ReviewsTerminalPanel({
     mountNode.addEventListener("click", focusTerminal);
     resizeObserver.observe(mountNode);
 
+    const desktopApi = window.ghatDesktop?.reviewsTerminal;
+    desktopApiRef.current = desktopApi ?? null;
+
+    let removeDataListener: () => void = noop;
+    let removeExitListener: () => void = noop;
+    let inputListener: { dispose: () => void } = { dispose: noop };
+
+    if (desktopApi) {
+      void desktopApi
+        .start()
+        .then((session) => {
+          terminal.writeln(
+            `\u001b[33m>\u001b[0m Shell: ${session.shell}  cwd: ${session.cwd}`,
+          );
+          fit();
+        })
+        .catch((error: unknown) => {
+          terminal.writeln(
+            "\u001b[31m>\u001b[0m Failed to start the desktop shell.",
+          );
+          terminal.writeln(
+            `\u001b[33m>\u001b[0m ${error instanceof Error ? error.message : String(error)}`,
+          );
+          terminal.writeln(
+            "\u001b[36m>\u001b[0m Check that your local shell exists and restart the desktop app.",
+          );
+        });
+
+      removeDataListener = desktopApi.onData((data) => {
+        terminal.write(data);
+      });
+
+      removeExitListener = desktopApi.onExit(({ exitCode, signal }) => {
+        terminal.writeln("");
+        terminal.writeln(
+          `\u001b[31m>\u001b[0m Shell exited (${exitCode ?? "?"}${
+            signal ? `, signal ${signal}` : ""
+          }).`,
+        );
+        terminal.writeln("\u001b[33m>\u001b[0m Press Clear to start a fresh shell.");
+      });
+
+      inputListener = terminal.onData((input) => {
+        void desktopApi.write(input);
+      });
+    } else {
+      terminal.writeln("\u001b[31m>\u001b[0m Desktop PTY is unavailable in the browser.");
+      terminal.writeln(
+        "\u001b[33m>\u001b[0m Launch the app with `pnpm desktop:dev` to use the real shell.",
+      );
+    }
+
     return () => {
       for (const timer of initialFitFrames) {
         window.clearTimeout(timer);
@@ -195,12 +166,15 @@ export function ReviewsTerminalPanel({
       resizeObserver.disconnect();
       window.removeEventListener("resize", fit);
       mountNode.removeEventListener("click", focusTerminal);
-      dataListener.dispose();
+      removeDataListener();
+      removeExitListener();
+      inputListener.dispose();
+      desktopApiRef.current = null;
       fitAddonRef.current = null;
       terminalRef.current = null;
       terminal.dispose();
     };
-  }, [runCommand, writePrompt]);
+  }, []);
 
   return (
     <section
@@ -226,9 +200,9 @@ export function ReviewsTerminalPanel({
 
       <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
         <span className="h-2 w-2 rounded-full bg-emerald-400" />
-        Terminal mounted
+        Desktop shell connected
         <span className="text-border">/</span>
-        PTY backend pending
+        PTY via Electron
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden p-3">
