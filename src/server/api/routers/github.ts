@@ -10,8 +10,11 @@ import {
 import {
   extractPullRequestNumber,
   fetchPullRequestCIStatus,
+  fetchPullRequestDetails,
+  fetchPullRequestDiscussionComments,
   fetchLogin,
   fetchPullRequestReviewStatus,
+  fetchRequestedReviews,
   fetchReviews,
 } from "~/server/services/github";
 import {
@@ -23,6 +26,7 @@ import {
 } from "~/server/services/github.types";
 
 const dateRangeSchema = z.enum(["1d", "7d", "30d", "90d"]).default("30d");
+const reviewFilterSchema = z.enum(["reviewed", "to_review"]).default("reviewed");
 const recapInputSchema = z
   .object({
     hours: z.number().int().min(12).max(72).optional(),
@@ -158,8 +162,9 @@ type RecapReviewItem = {
   title: string;
   url: string;
   repoName: string;
+  author: string | null;
   branch: string | null;
-  state: "open" | "merged" | "closed" | null;
+  state: "open" | "draft" | "merged" | "closed" | null;
   createdAt: Date;
   updatedAt: Date | null;
 };
@@ -171,6 +176,7 @@ function buildReviewItemFromGitHub(item: Review): RecapReviewItem {
     title: item.title,
     url: item.url,
     repoName: item.repoName,
+    author: item.author,
     branch: null,
     state: item.state,
     createdAt: item.createdAt,
@@ -336,16 +342,59 @@ export const githubRouter = createTRPCRouter({
       }
     }),
 
+  getPullRequestDetails: protectedProcedure
+    .input(
+      z.object({
+        repoName: z.string().min(1),
+        prNumber: z.number().int().positive(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        const { token } = await getTokenAndLogin(ctx);
+        const [pr, comments] = await Promise.all([
+          fetchPullRequestDetails(token, input.repoName, input.prNumber),
+          fetchPullRequestDiscussionComments(
+            token,
+            input.repoName,
+            input.prNumber,
+          ),
+        ]);
+
+        return {
+          title: pr.title ?? null,
+          body: pr.body?.trim() ?? null,
+          comments,
+        };
+      } catch {
+        return {
+          title: null,
+          body: null,
+          comments: [],
+        };
+      }
+    }),
+
   getReviews: protectedProcedure
-    .input(z.object({ dateRange: dateRangeSchema }).default({}))
+    .input(
+      z
+        .object({
+          dateRange: dateRangeSchema,
+          filter: reviewFilterSchema,
+        })
+        .default({}),
+    )
     .query(async ({ ctx, input }) => {
       const cutoff = daysAgo(input.dateRange);
       try {
         const { token, login } = await getTokenAndLogin(ctx);
-        const reviews = await fetchReviews(token, login);
-        return reviews
-          .filter((review) => review.createdAt >= cutoff)
-          .map(buildReviewItemFromGitHub);
+        const reviews =
+          input.filter === "to_review"
+            ? await fetchRequestedReviews(token, login)
+            : (await fetchReviews(token, login)).filter(
+                (review) => review.createdAt >= cutoff,
+              );
+        return reviews.map(buildReviewItemFromGitHub);
       } catch {
         return [];
       }

@@ -204,6 +204,21 @@ describe("mapSearchItemToReview", () => {
     expect(review.state).toBe("merged");
     expect(review.repoName).toBe("owner/repo");
   });
+
+  it("maps draft PRs to draft review state", () => {
+    const item: GitHubSearchItem = {
+      title: "draft PR awaiting review",
+      html_url: "https://github.com/owner/repo/pull/100",
+      state: "open",
+      draft: true,
+      created_at: "2024-01-15T10:00:00Z",
+      updated_at: "2024-01-16T00:00:00Z",
+      repository_url: "https://api.github.com/repos/owner/repo",
+      pull_request: { merged_at: null },
+    };
+
+    expect(mapSearchItemToReview(item).state).toBe("draft");
+  });
 });
 
 describe("deriveLatestSubmittedReviewAt", () => {

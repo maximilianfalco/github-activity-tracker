@@ -53,6 +53,7 @@ export function mapPushEventToCommits(event: GitHubEvent): Commit[] {
 
 export function mapSearchItemToPR(item: GitHubSearchItem): PullRequest {
   const repoName = extractRepoName(item.repository_url);
+  const number = extractPullRequestNumber(item.html_url);
   let state: PullRequest["state"];
   if (item.pull_request?.merged_at) {
     state = "merged";
@@ -64,6 +65,7 @@ export function mapSearchItemToPR(item: GitHubSearchItem): PullRequest {
     state = "closed";
   }
   return {
+    number,
     title: item.title,
     repoName,
     url: item.html_url,
@@ -77,14 +79,17 @@ export function mapSearchItemToReview(item: GitHubSearchItem): Review {
   const repoName = extractRepoName(item.repository_url);
   const state = item.pull_request?.merged_at
     ? "merged"
-    : item.state === "open"
-      ? "open"
-      : "closed";
+    : item.state === "open" && item.draft
+      ? "draft"
+      : item.state === "open"
+        ? "open"
+        : "closed";
 
   return {
     title: item.title,
     repoName,
     url: item.html_url,
+    author: item.user?.login ?? null,
     state,
     createdAt: new Date(item.created_at),
     updatedAt: new Date(item.updated_at),
@@ -305,6 +310,20 @@ export async function fetchReviews(
     .toSorted((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 }
 
+export async function fetchRequestedReviews(
+  token: string,
+  login: string,
+): Promise<Review[]> {
+  const items = await fetchSearchResults(
+    token,
+    `is:pr is:open review-requested:${login} -author:${login} sort:updated`,
+  );
+
+  return items
+    .map(mapSearchItemToReview)
+    .toSorted((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+}
+
 export async function fetchCurrentPullRequests(
   token: string,
   login: string,
@@ -388,9 +407,9 @@ export async function fetchPullRequestDiscussionComments(
     fetchPullRequestReviewComments(token, repoName, prNumber),
   ]);
 
-  const discussionComments = [
-    ...issueComments
+  const issueDiscussionComments = issueComments
       .filter((comment) => comment.body.trim().length > 0)
+      .filter((comment) => !isBotAuthor(comment.user?.login ?? null))
       .map((comment) => ({
         id: `issue-comment:${comment.id}`,
         author: comment.user?.login ?? null,
@@ -398,35 +417,101 @@ export async function fetchPullRequestDiscussionComments(
         url: comment.html_url,
         createdAt: new Date(comment.created_at),
         updatedAt: new Date(comment.updated_at),
-      })),
-    ...reviewComments
+        kind: "issue_comment" as const,
+        replies: [],
+      }));
+
+  const reviewDiscussionComments = reviews
+    .filter((review) => (review.body?.trim().length ?? 0) > 0)
+    .filter((review) => review.submitted_at)
+    .filter((review) => !isBotAuthor(review.user?.login ?? null))
+    .map((review) => ({
+      id: `review:${review.id ?? review.submitted_at}`,
+      reviewId: review.id ?? null,
+      author: review.user?.login ?? null,
+      body: review.body!.trim(),
+      url:
+        review.html_url ??
+        `https://github.com/${repoName}/pull/${prNumber}#pullrequestreview-${review.id ?? ""}`,
+      createdAt: new Date(review.submitted_at!),
+      updatedAt: new Date(review.updated_at ?? review.submitted_at!),
+      kind: "review" as const,
+      replies: [] as PullRequestDiscussionComment[],
+    }));
+
+  const reviewNodes = new Map(
+    reviewDiscussionComments
+      .filter((review) => review.reviewId !== null)
+      .map((review) => [review.reviewId!, review]),
+  );
+
+  const reviewCommentNodes = reviewComments
       .filter((comment) => comment.body.trim().length > 0)
+      .filter((comment) => !isBotAuthor(comment.user?.login ?? null))
       .map((comment) => ({
         id: `review-comment:${comment.id}`,
+        numericId: comment.id,
+        parentNumericId: comment.in_reply_to_id ?? null,
+        reviewId: comment.pull_request_review_id ?? null,
         author: comment.user?.login ?? null,
         body: comment.body.trim(),
         url: comment.html_url,
         createdAt: new Date(comment.created_at),
         updatedAt: new Date(comment.updated_at),
-      })),
-    ...reviews
-      .filter((review) => (review.body?.trim().length ?? 0) > 0)
-      .filter((review) => review.submitted_at)
-      .map((review) => ({
-        id: `review:${review.id ?? review.submitted_at}`,
-        author: review.user?.login ?? null,
-        body: review.body!.trim(),
-        url:
-          review.html_url ??
-          `https://github.com/${repoName}/pull/${prNumber}#pullrequestreview-${review.id ?? ""}`,
-        createdAt: new Date(review.submitted_at!),
-        updatedAt: new Date(review.updated_at ?? review.submitted_at!),
-      })),
+        kind: "review_comment" as const,
+        replies: [] as PullRequestDiscussionComment[],
+      }));
+
+  const reviewCommentNodeMap = new Map(
+    reviewCommentNodes.map((comment) => [comment.numericId, comment]),
+  );
+
+  const rootReviewCommentNodes: PullRequestDiscussionComment[] = [];
+
+  for (const comment of reviewCommentNodes) {
+    if (comment.parentNumericId !== null) {
+      const parent = reviewCommentNodeMap.get(comment.parentNumericId);
+      if (parent) {
+        parent.replies.push(comment);
+        continue;
+      }
+    }
+
+    if (comment.reviewId !== null) {
+      const review = reviewNodes.get(comment.reviewId);
+      if (review) {
+        review.replies.push(comment);
+        continue;
+      }
+    }
+
+    rootReviewCommentNodes.push(comment);
+  }
+
+  const discussionComments = [
+    ...issueDiscussionComments,
+    ...reviewDiscussionComments,
+    ...rootReviewCommentNodes,
   ];
 
-  return discussionComments.toSorted(
+  return sortDiscussionThreads(discussionComments).toSorted(
     (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
   );
+}
+
+function isBotAuthor(login: string | null): boolean {
+  return login?.toLowerCase().endsWith("[bot]") ?? false;
+}
+
+function sortDiscussionThreads(
+  comments: PullRequestDiscussionComment[],
+): PullRequestDiscussionComment[] {
+  return comments.map((comment) => ({
+    ...comment,
+    replies: sortDiscussionThreads(comment.replies).toSorted(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+    ),
+  }));
 }
 
 async function fetchPullRequestReviews(
@@ -626,11 +711,7 @@ export async function fetchPullRequestCIStatus(
   repoName: string,
   prNumber: number,
 ): Promise<PullRequestCIStatus> {
-  const prResponse = await githubFetch(
-    token,
-    `${GITHUB_API}/repos/${repoName}/pulls/${prNumber}`,
-  );
-  const pr = (await prResponse.json()) as GitHubPullRequestDetails;
+  const pr = await fetchPullRequestDetails(token, repoName, prNumber);
   const headSha = pr.head.sha;
 
   const [combinedStatusResponse, checkRunsResponse] = await Promise.allSettled([
@@ -659,6 +740,19 @@ export async function fetchPullRequestCIStatus(
     combinedStatus?.total_count,
     checkRuns,
   );
+}
+
+export async function fetchPullRequestDetails(
+  token: string,
+  repoName: string,
+  prNumber: number,
+): Promise<GitHubPullRequestDetails> {
+  const prResponse = await githubFetch(
+    token,
+    `${GITHUB_API}/repos/${repoName}/pulls/${prNumber}`,
+  );
+
+  return (await prResponse.json()) as GitHubPullRequestDetails;
 }
 
 async function fetchSearchResults(

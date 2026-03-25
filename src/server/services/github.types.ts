@@ -35,7 +35,8 @@ export interface Review {
   title: string;
   repoName: string;
   url: string;
-  state: "open" | "merged" | "closed";
+  author: string | null;
+  state: "open" | "draft" | "merged" | "closed";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -47,6 +48,8 @@ export interface PullRequestDiscussionComment {
   url: string;
   createdAt: Date;
   updatedAt: Date;
+  kind: "issue_comment" | "review" | "review_comment";
+  replies: PullRequestDiscussionComment[];
 }
 
 export interface GitHubEvent {
@@ -89,6 +92,9 @@ export interface GitHubSearchItem {
   created_at: string;
   updated_at: string;
   repository_url: string;
+  user?: {
+    login: string;
+  } | null;
   pull_request?: {
     merged_at: string | null;
   };
@@ -137,12 +143,16 @@ export interface GitHubPullRequestReviewComment {
   html_url: string;
   created_at: string;
   updated_at: string;
+  in_reply_to_id?: number | null;
+  pull_request_review_id?: number | null;
   user: {
     login: string;
   } | null;
 }
 
 export interface GitHubPullRequestDetails {
+  title?: string;
+  body?: string | null;
   head: {
     sha: string;
   };
